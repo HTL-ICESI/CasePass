@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: casepass-postgres
+    environment:
+      POSTGRES_DB: casepass
+      POSTGRES_USER: casepass
+      POSTGRES_PASSWORD: casepass
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - casepass-net
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: casepass-chromadb
+    ports:
+      - '8000:8000'
+    networks:
+      - casepass-net
+
+volumes:
+  postgres-data:
+
+networks:
+  casepass-net:
+    driver: bridge
