@@ -18,19 +18,23 @@ The priority for the hackathon is documentation before code: the product must kn
 
 1. `legal-framework/` defines the legal rules that govern design decisions.
 2. `metadata-schema/` defines the 13 required metadata groups that should replace the current Colombian-oriented case fields.
-3. `workflow-gates/` will define stage-by-stage validation rules.
-4. `legal-knowledge-base/` will split chatbot rules into sourced topics.
-5. `../casos-prueba/` should be migrated to England and Wales test matters using the metadata schema.
+3. `legal-source-citation/` defines how every legal answer is grounded, cited and refused when source support is missing.
+4. `source-registry/` lists the official CPR, legislation, form, regulator and guidance sources for the MVP.
+5. `test-documents/` defines public form archetypes and extraction checks for document recognition.
+6. `workflow-gates/` will define stage-by-stage validation rules.
+7. `legal-knowledge-base/` will split chatbot rules into sourced topics.
+8. `../casos-prueba/` should be migrated to England and Wales test matters using the metadata schema.
 
 ## Hackathon Order
 
 For a 24-hour build, implement in this order:
 
 1. Wire the forum/ruleset selector and metadata shape.
-2. Add the two human verification checkpoints.
-3. Block document ingestion until recipient clearance is captured.
-4. Replace generic roles with solicitor-on-record, instructed counsel, advocate-only and full change of solicitor.
-5. Add no-recording guardrails and post-hearing attendance-note/transcript workflows.
+2. Wire the legal source citation layer so chatbot and validation outputs can cite a source, URL and pinpoint rule/page.
+3. Add the two human verification checkpoints.
+4. Block document ingestion until recipient clearance is captured.
+5. Replace generic roles with solicitor-on-record, instructed counsel, advocate-only and full change of solicitor.
+6. Add no-recording guardrails and post-hearing attendance-note/transcript workflows.
 
 ## Current Code Gap
 
