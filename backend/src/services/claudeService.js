@@ -170,6 +170,21 @@ function localFactFromChunk(chunk, fallback = 'Not found in file.') {
   return `${sentence} [Doc: ${chunk.doc_name}, p.${chunk.page}]`;
 }
 
+function findChunkSentence(chunk, pattern, fallback = 'Not found in file.') {
+  if (!chunk) {
+    return fallback;
+  }
+
+  const sentences = String(chunk.text || '').split(/(?<=[.!?])\s+/).map((sentence) => sentence.trim()).filter(Boolean);
+  const matched = sentences.find((sentence) => pattern.test(sentence));
+
+  if (!matched) {
+    return fallback;
+  }
+
+  return `${matched} [Doc: ${chunk.doc_name}, p.${chunk.page}]`;
+}
+
 function localClaudeLog(handoffId, payload) {
   const outputTokens = estimateTokenCount(JSON.stringify(payload));
   console.log(`[CLAUDE] handoff=${handoffId} tokens_in=0 tokens_out=${outputTokens} latency=0ms`);
@@ -236,12 +251,18 @@ async function reviewMatter(handoffId, chunks, handoffData) {
     const secondChunk = relevantChunks[1] || firstChunk;
     const response = {
       stage_of_proceedings: localFactFromChunk(firstChunk),
-      most_recent_operative_event: localFactFromChunk(firstChunk),
-      live_deadlines: handoffData.next_hearing_date ? [`Next hearing date noted as ${handoffData.next_hearing_date}. [Doc: ${firstChunk.doc_name}, p.${firstChunk.page}]`] : ['Not found in file.'],
-      urgent_issues: [localFactFromChunk(secondChunk)],
+      most_recent_operative_event: findChunkSentence(firstChunk, /most recent operative event|order dated|latest/i, localFactFromChunk(firstChunk)),
+      live_deadlines: [
+        findChunkSentence(firstChunk, /live deadline|deadline|due by/i, handoffData.next_hearing_date ? `Next hearing date noted as ${handoffData.next_hearing_date}. [Doc: ${firstChunk.doc_name}, p.${firstChunk.page}]` : 'Not found in file.'),
+      ],
+      urgent_issues: [findChunkSentence(secondChunk, /urgent issue|risk|missing/i, localFactFromChunk(secondChunk))],
       missing_documents: [],
-      next_procedural_step: localFactFromChunk(secondChunk),
-      sources: mapCitationsToSources([localFactFromChunk(firstChunk), localFactFromChunk(secondChunk)], relevantChunks),
+      next_procedural_step: findChunkSentence(secondChunk, /next procedural step|next step|prepare|file/i, localFactFromChunk(secondChunk)),
+      sources: mapCitationsToSources([
+        localFactFromChunk(firstChunk),
+        findChunkSentence(firstChunk, /live deadline|deadline|due by/i, localFactFromChunk(firstChunk)),
+        findChunkSentence(secondChunk, /next procedural step|next step|prepare|file/i, localFactFromChunk(secondChunk)),
+      ], relevantChunks),
     };
     localClaudeLog(handoffId, response);
     return response;
@@ -296,8 +317,8 @@ async function generateHandoverNote(handoffId, chunks, handoffData, matterReview
       executive_summary: `${localFactFromChunk(firstChunk)} ${localFactFromChunk(secondChunk)}`.trim(),
       current_procedural_status: matterReview.stage_of_proceedings || localFactFromChunk(firstChunk),
       next_required_step: matterReview.next_procedural_step || localFactFromChunk(secondChunk),
-      live_deadlines: matterReview.live_deadlines?.length ? matterReview.live_deadlines : ['Not found in file.'],
-      risk_flags: matterReview.urgent_issues?.length ? matterReview.urgent_issues : ['Not found in file.'],
+      live_deadlines: (matterReview.live_deadlines || []).filter(Boolean),
+      risk_flags: (matterReview.urgent_issues || []).filter(Boolean),
       task_scope: handoffData.intended_task || 'No task scope recorded.',
       file_based_facts: [localFactFromChunk(firstChunk), localFactFromChunk(secondChunk)],
       strategic_notes: [`Strategic note: ${handoffData.intended_task || 'Review the released handoff pack.'}`],

@@ -1,0 +1,114 @@
+{
+  "registry_version": "ew-civil-cpr-mvp-v1",
+  "trust_tier": "A",
+  "sources": [
+    {
+      "id": "cpr-part-6",
+      "document_name": "CPR Part 6 - Service of Documents",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part06",
+      "pinpoints": ["6.3", "6.4", "6.7", "6.14"],
+      "metadata_fields": ["service_method", "service_actor", "service_address", "deemed_service_date"],
+      "workflow_gates": ["service-check", "deadline-engine", "handoff-acceptance"]
+    },
+    {
+      "id": "cpr-part-7",
+      "document_name": "CPR Part 7 - How to Start Proceedings",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part07",
+      "pinpoints": ["7.2", "7.4", "7.5"],
+      "metadata_fields": ["issue_date", "poc_served_flag", "poc_due_date", "claim_form_service_deadline"],
+      "workflow_gates": ["ingest", "pleadings-validation", "service-check"]
+    },
+    {
+      "id": "cpr-part-10",
+      "document_name": "CPR Part 10 - Acknowledgment of Service",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part10",
+      "pinpoints": ["10.1", "10.2", "10.3", "10.5"],
+      "metadata_fields": ["aos_required", "aos_due_date", "jurisdiction_challenge_flag", "address_for_service"],
+      "workflow_gates": ["response-deadline", "forum-detection", "recipient-acceptance"]
+    },
+    {
+      "id": "cpr-part-15",
+      "document_name": "CPR Part 15 - Defence and Reply",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part15",
+      "pinpoints": ["15.4", "15.5"],
+      "metadata_fields": ["defence_due_date", "agreed_extension_flag", "extension_end_date"],
+      "workflow_gates": ["response-deadline", "handoff-priority"]
+    },
+    {
+      "id": "cpr-part-16",
+      "document_name": "CPR Part 16 - Statements of Case",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part16",
+      "pinpoints": ["16.2", "16.3", "16.4", "16.5"],
+      "metadata_fields": ["claim_nature", "remedy_sought", "value_band", "poc_completeness", "defence_response_matrix"],
+      "workflow_gates": ["pleadings-validation", "track-estimation"]
+    },
+    {
+      "id": "cpr-part-23",
+      "document_name": "CPR Part 23 - General Rules about Applications",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part23",
+      "pinpoints": ["23.3", "23.6", "23.7"],
+      "metadata_fields": ["application_type", "application_notice_date", "hearing_requested_flag", "service_of_application_date"],
+      "workflow_gates": ["interim-application", "hearing-readiness"]
+    },
+    {
+      "id": "cpr-part-26",
+      "document_name": "CPR Part 26 - Case Management and Tracks",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part26",
+      "pinpoints": ["26.1", "26.4", "26.5", "26.6"],
+      "metadata_fields": ["track", "complexity_band", "dq_due_date", "mediation_flag", "strikeout_risk_flag"],
+      "workflow_gates": ["allocation-dq", "handoff-priority"]
+    },
+    {
+      "id": "cpr-part-31",
+      "document_name": "CPR Part 31 - Disclosure and Inspection of Documents",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part31",
+      "pinpoints": ["31.2", "31.6", "31.7", "31.10", "31.11", "31.14", "31.15"],
+      "metadata_fields": ["disclosure_regime", "disclosure_list_due", "continuing_disclosure_flag", "inspection_rights_flag"],
+      "workflow_gates": ["disclosure", "post-action-update"]
+    },
+    {
+      "id": "cpr-part-32",
+      "document_name": "CPR Part 32 - Evidence",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part32",
+      "pinpoints": ["32.1", "32.2", "32.4", "32.5"],
+      "metadata_fields": ["witness_statement_flag", "hearing_type", "oral_evidence_flag"],
+      "workflow_gates": ["witnessing", "hearing-readiness"]
+    },
+    {
+      "id": "cpr-part-39",
+      "document_name": "CPR Part 39 - Miscellaneous Provisions Relating to Hearings",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part39",
+      "pinpoints": ["39.2", "39.5", "39.8", "39.9"],
+      "metadata_fields": ["hearing_public_flag", "bundle_owner", "copied_to_other_side_flag", "recording_warning"],
+      "workflow_gates": ["hearing-readiness", "recording-warning"]
+    },
+    {
+      "id": "cpr-part-42",
+      "document_name": "CPR Part 42 - Change of Solicitor",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part42",
+      "pinpoints": ["42.1", "42.2", "42.3"],
+      "metadata_fields": ["solicitor_on_record", "new_address_for_service", "notice_of_change_filed", "notice_of_change_served"],
+      "workflow_gates": ["handoff-acceptance", "representation-check"]
+    },
+    {
+      "id": "cpr-part-52",
+      "document_name": "CPR Part 52 - Appeals",
+      "document_type": "cpr",
+      "canonical_url": "https://www.justice.gov.uk/courts/procedure-rules/civil/rules/part52",
+      "pinpoints": ["52.1", "52.3", "52.12", "52.13", "52.14"],
+      "metadata_fields": ["appeal_court", "permission_required", "appellant_notice_due", "respondent_notice_due", "transcript_needed_flag"],
+      "workflow_gates": ["appeal", "post-action-update"]
+    }
+  ]
+}
