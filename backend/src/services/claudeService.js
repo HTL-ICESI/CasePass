@@ -73,6 +73,20 @@ function stripJsonResponseText(text) {
   return extractJsonObject(result);
 }
 
+const REASONING_PROSE_PATTERNS = [
+  /^(the user is asking|the user wants|the user has asked)/i,
+  /^(i need to|i should|i must|i'll|i will|i have to|let me|let's)/i,
+  /^(looking at|based on the chunks|checking the|reviewing the)/i,
+  /^(wait[,.]|hmm[,.]|okay[,.]|ok[,.]|first[,.]|so[,.])/i,
+  /^(analy[sz]ing|reasoning|thinking|considering)\b/i,
+];
+
+const ANSWER_PROSE_STARTERS = [
+  /^(based on|according to|the file|the next step|the immediate|the claimant|the defendant|the matter|the court)/i,
+  /^(yes\b|no\b|note\b|caveat\b)/i,
+  /^\*\*[A-Z]/,
+];
+
 function stripReasoningBlocks(text) {
   let result = String(text || '');
 
@@ -80,10 +94,35 @@ function stripReasoningBlocks(text) {
   if (lastClose !== -1) {
     result = result.slice(lastClose + '</think>'.length);
   }
-
   result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
 
-  if (/Analyze User Input|Mental Refinement|Formulate Response|Key Discrepancies|Matter metadata:|Retrieved chunks:|I must|Draft:/i.test(result)) {
+  const looksLikeProseReasoning =
+    REASONING_PROSE_PATTERNS.some((pattern) => pattern.test(result.trim())) ||
+    /Retrieved source chunks:|Matter metadata:|I will formulate|I'll formulate|Now I (will|need)|Final Answer\s*:|Final Response\s*:/i.test(result);
+
+  if (looksLikeProseReasoning) {
+    const finalMatch = result.match(
+      /(?:Final Answer|Final Response|Answer|Response|Draft)\s*[:\-]\s*([\s\S]+)$/i,
+    );
+    if (finalMatch && finalMatch[1].trim().length >= 60) {
+      return finalMatch[1].trim();
+    }
+
+    const sentences = result.split(/(?<=[.!?])\s+/);
+    const startSentence = sentences.findIndex((sentence) =>
+      ANSWER_PROSE_STARTERS.some((pattern) => pattern.test(sentence.trim())),
+    );
+    if (startSentence > 0) {
+      const remaining = sentences.slice(startSentence).join(' ').trim();
+      if (remaining.length >= 60 && /\[Doc:\s*[^\]]+,\s*p\.\d+\]/i.test(remaining)) {
+        return remaining;
+      }
+    }
+
+    return '';
+  }
+
+  if (/Analyze User Input|Mental Refinement|Formulate Response|Key Discrepancies|Draft:/i.test(result)) {
     const finalMatch = result.match(/(?:Final Answer|Final Response|Answer|Draft)\s*:\s*([\s\S]+)$/i);
     const finalText = finalMatch ? finalMatch[1].trim() : '';
     return finalText.length >= 80 ? finalText : '';
@@ -755,6 +794,9 @@ async function callClaude(handoffId, system, userMessage, maxTokens, options = {
         temperature: 0,
         max_tokens: maxTokens,
         ...(options.expectJson ? { response_format: { type: 'json_object' } } : {}),
+        ...(options.disableThinking
+          ? { extra_body: { chat_template_kwargs: { enable_thinking: false } } }
+          : {}),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: userMessage },
@@ -877,6 +919,9 @@ async function callClaudeStream(handoffId, system, userMessage, maxTokens, optio
         max_tokens: maxTokens,
         stream: true,
         ...(options.expectJson ? { response_format: { type: 'json_object' } } : {}),
+        ...(options.disableThinking
+          ? { extra_body: { chat_template_kwargs: { enable_thinking: false } } }
+          : {}),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: userMessage },
@@ -1001,11 +1046,17 @@ function buildChatPromptParts(question, chunks, handoffContext = {}) {
 
   const systemPrompt = `You are CasePass Chat, a fast legal file assistant for solicitors, counsel, and receiving advocates in England and Wales.
 
-CRITICAL OUTPUT RULE:
-- Start directly with the user-facing answer.
-- Do not write analysis, planning, "Analyze user input", "mental refinement", "final answer", chain-of-thought, or reasoning steps.
-- Never mention the prompt, retrieval, metadata, chunks, or your internal process.
-- If there is a mismatch between matter metadata and source chunks, say that plainly in one sentence and cite the source chunks.
+CRITICAL OUTPUT RULE (FAILURE TO COMPLY MAKES THE RESPONSE UNUSABLE):
+- Your FIRST CHARACTER must be the first word of the user-facing answer. Never start with "The user is asking", "I need to", "Looking at", "Wait", "Let me", "I'll", "I will", "First", "So", or any other meta-commentary.
+- Forbidden anywhere in your reply: phrases describing what you are doing ("I need to check", "Based on the chunks I see", "I will formulate", "Let me draft", "Now I will", "Final Answer:", "Draft:").
+- Forbidden: visible labels like "[S1]", "[S2]", "chunk:1", "relevance:0.93", "Retrieved chunks", "Matter metadata" — those are internal context, NEVER copied into the reply.
+- Do not narrate your reasoning, options considered, or process. Only the conclusion the user reads.
+- If matter metadata and source chunks disagree about the parties or claim, state that mismatch in ONE sentence at the top and cite the chunks, then continue with the answer.
+
+OUTPUT SHAPE:
+- 2-5 short bullets when the user asks "what to do next" or "what's the status".
+- A 1-3 sentence direct answer for factual lookups.
+- End each fact with [Doc: filename, p.N] citation. Never use [S1] or [chunk:X] notation in the output.
 
 Use the retrieved matter-file chunks as your evidence base, and use the matter metadata plus recent conversation only to understand context and follow-up questions.
 
@@ -1088,7 +1139,7 @@ async function chatWithSources(question, chunks, handoffContext = {}) {
   }
 
   const { systemPrompt, userMessage } = buildChatPromptParts(question, relevantChunks, handoffContext);
-  const answer = await callClaude(handoffId, systemPrompt, userMessage, 650);
+  const answer = await callClaude(handoffId, systemPrompt, userMessage, 1200, { disableThinking: true });
 
   return finaliseChatAnswer(question, answer, relevantChunks);
 }
@@ -1104,7 +1155,7 @@ async function streamChatWithSources(question, chunks, handoffContext = {}, onTo
   }
 
   const { systemPrompt, userMessage } = buildChatPromptParts(question, relevantChunks, handoffContext);
-  const answer = await callClaudeStream(handoffId, systemPrompt, userMessage, 650, {}, onToken);
+  const answer = await callClaudeStream(handoffId, systemPrompt, userMessage, 1200, { disableThinking: true }, onToken);
   return finaliseChatAnswer(question, answer, relevantChunks);
 }
 

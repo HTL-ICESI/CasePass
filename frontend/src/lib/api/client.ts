@@ -310,8 +310,25 @@ function mapReviewFromAiDraft(draft: any): MatterReview {
   };
 }
 
+function pickNoteDraft(note: BackendNote | null) {
+  if (!note) return null;
+  const edited = parseJson<any>(note.solicitor_edited, null);
+  const draft = parseJson<any>(note.ai_draft, null);
+  const editedHasContent =
+    edited &&
+    typeof edited === "object" &&
+    (edited.executive_summary ||
+      edited.current_procedural_status ||
+      edited.next_required_step ||
+      edited.risk_flags ||
+      edited.live_deadlines ||
+      edited.file_based_facts ||
+      edited.sources);
+  return editedHasContent ? edited : draft;
+}
+
 function mapLatestNote(note: BackendNote | null) {
-  const noteDraft = note ? parseJson<any>(note.solicitor_edited || note.ai_draft, {}) : null;
+  const noteDraft = pickNoteDraft(note);
   const sourceLookup = buildSourceLookup(noteDraft?.sources || []);
 
   if (!noteDraft || typeof noteDraft !== "object") {
@@ -364,7 +381,7 @@ function mapDeadlines(caseSummary: BackendCase): Deadline[] {
 }
 
 function deriveSummary(caseSummary: BackendCase, note: BackendNote | null) {
-  const noteDraft = note ? parseJson<any>(note.solicitor_edited || note.ai_draft, {}) : null;
+  const noteDraft = pickNoteDraft(note);
   return (
     noteDraft?.executive_summary ||
     caseSummary?.most_recent_operative_event ||
@@ -834,10 +851,9 @@ export const realClient: CasePassClient = {
         ? payload.handover_notes[payload.handover_notes.length - 1]
         : null;
 
-    if (latestNote?.ai_draft || latestNote?.solicitor_edited) {
-      return mapReviewFromAiDraft(
-        parseJson<any>(latestNote.solicitor_edited || latestNote.ai_draft, {}),
-      );
+    const draft = pickNoteDraft(latestNote);
+    if (draft) {
+      return mapReviewFromAiDraft(draft);
     }
 
     return null;

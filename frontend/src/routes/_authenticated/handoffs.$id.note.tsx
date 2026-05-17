@@ -49,13 +49,12 @@ function NotePage() {
   });
 
   const approveNote = useMutation({
-    mutationFn: () =>
-      api.approveHandoverNote(id, h?.noteId || "", {
-        approved: true,
-        text: "Approved from frontend workflow.",
-      }),
+    mutationFn: () => api.approveHandoverNote(id, h?.noteId || "", null),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+        queryClient.invalidateQueries({ queryKey: ["matter-review", id] }),
+      ]);
       toast.success("Handover note approved.");
     },
     onError: (error) =>
@@ -108,17 +107,20 @@ function NotePage() {
               {h.noteId ? "Refresh note" : "Generate note"}
             </Button>
           )}
-          {isSender && h?.backendStatus === "pack_review" && h?.noteId && !h.noteApproved && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => approveNote.mutate()}
-              disabled={approveNote.isPending}
-            >
-              {approveNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              Approve note
-            </Button>
-          )}
+          {isSender &&
+            ["pack_building", "pack_review"].includes(h?.backendStatus || "") &&
+            h?.noteId &&
+            !h.noteApproved && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => approveNote.mutate()}
+                disabled={approveNote.isPending}
+              >
+                {approveNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Approve note
+              </Button>
+            )}
           {isSender && h?.backendStatus === "pack_review" && h?.noteApproved && (
             <Button
               variant="outline"

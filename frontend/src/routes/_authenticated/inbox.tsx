@@ -99,6 +99,11 @@ function InboxPage() {
               <Skeleton key={i} className="h-40 w-full rounded-2xl" />
             ))}
           </div>
+        ) : list.isError ? (
+          <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+            Could not load inbox:{" "}
+            {list.error instanceof Error ? list.error.message : String(list.error)}
+          </div>
         ) : items.length === 0 ? (
           <EmptyState />
         ) : (

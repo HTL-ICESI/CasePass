@@ -137,13 +137,29 @@ function SourcesPage() {
     "pack_building",
     "pack_review",
   ]);
+  const receiverDocReadyStatuses = new Set([
+    "pack_released",
+    "accepted",
+    "task_in_progress",
+    "post_action_pending",
+    "update_draft",
+    "update_verified",
+    "routed",
+    "completed",
+    "escalated",
+  ]);
   const isSender = Boolean(user && handoff.data && handoff.data.ownerId === user.id);
+  const isReceiver = Boolean(user && handoff.data && handoff.data.receivingId === user.id);
   const isEditable = Boolean(
     isSender && handoff.data && senderEditStatuses.has(handoff.data.backendStatus),
   );
   const canUpload = isEditable;
   const stagedCount = (data || []).filter((document) => document.status === "staged").length;
   const showStagedRetryBanner = isSender && stagedCount > 0 && canUpload;
+  const packNotReleasedForReceiver =
+    isReceiver &&
+    handoff.data &&
+    !receiverDocReadyStatuses.has(handoff.data.backendStatus);
 
   useEffect(() => {
     if (!openDocId || !data || autoOpenedId === openDocId) return;
@@ -249,6 +265,14 @@ function SourcesPage() {
             {Array.from({ length: 5 }).map((_, index) => (
               <Skeleton key={index} className="h-12 w-full" />
             ))}
+          </div>
+        ) : packNotReleasedForReceiver ? (
+          <div className="px-6 py-12 text-center">
+            <p className="text-sm font-medium text-foreground">Pack not released yet.</p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              The sending solicitor is still preparing this matter. Documents and citations will
+              appear here once the handover pack is released.
+            </p>
           </div>
         ) : !data || data.length === 0 ? (
           <p className="px-6 py-12 text-center text-sm text-muted-foreground">
