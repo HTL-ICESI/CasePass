@@ -1,0 +1,57 @@
+{
+  "registry_version": "ew-regulatory-guidance-mvp-v1",
+  "trust_tier": "B",
+  "sources": [
+    {
+      "id": "lsa-2007-s12",
+      "document_name": "Legal Services Act 2007 section 12",
+      "document_type": "statute",
+      "canonical_url": "https://www.legislation.gov.uk/ukpga/2007/29/section/12",
+      "trust_tier": "A",
+      "metadata_fields": ["representation_model", "conduct_of_litigation_flag", "rights_of_audience_flag", "instructed_counsel_flag"],
+      "workflow_gates": ["representation-check", "rejection-rules"]
+    },
+    {
+      "id": "courts-act-2003-85a-85b",
+      "document_name": "Courts Act 2003 sections 85A and 85B",
+      "document_type": "statute",
+      "canonical_url": "https://www.legislation.gov.uk/ukpga/2003/39/section/85B",
+      "trust_tier": "A",
+      "metadata_fields": ["remote_hearing_flag", "remote_observer_flag", "recording_prohibition_flag"],
+      "workflow_gates": ["recording-warning", "hearing-note-workflow"]
+    },
+    {
+      "id": "sra-principles",
+      "document_name": "SRA Principles",
+      "document_type": "regulator_guidance",
+      "canonical_url": "https://www.sra.org.uk/solicitors/standards-regulations/principles/",
+      "metadata_fields": ["ethical_mode", "confidentiality_flag", "supervision_owner", "ai_review_status"],
+      "workflow_gates": ["compliance", "human-verification"]
+    },
+    {
+      "id": "sra-confidentiality",
+      "document_name": "SRA guidance on confidentiality of client information",
+      "document_type": "regulator_guidance",
+      "canonical_url": "https://www.sra.org.uk/solicitors/guidance/confidentiality-client-information/",
+      "metadata_fields": ["client_consent_flag", "confidentiality_flag"],
+      "workflow_gates": ["handoff-acceptance", "solicitor-approval", "compliance"]
+    },
+    {
+      "id": "mlr-2017-reg-27",
+      "document_name": "Money Laundering Regulations 2017 regulation 27",
+      "document_type": "statutory_instrument",
+      "canonical_url": "https://www.legislation.gov.uk/uksi/2017/692/regulation/27",
+      "trust_tier": "A",
+      "metadata_fields": ["aml_scope_flag", "cdd_trigger", "cdd_status"],
+      "workflow_gates": ["recipient-acceptance", "compliance"]
+    },
+    {
+      "id": "ico-data-minimisation",
+      "document_name": "ICO guidance on data minimisation",
+      "document_type": "regulator_guidance",
+      "canonical_url": "https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/data-protection-principles/a-guide-to-the-data-protection-principles/data-minimisation/",
+      "metadata_fields": ["lawful_basis", "data_minimisation_flag", "retention_policy", "redaction_status", "ai_processing_flag"],
+      "workflow_gates": ["file-ingestion", "handoff-acceptance", "compliance"]
+    }
+  ]
+}

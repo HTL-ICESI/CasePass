@@ -1,0 +1,60 @@
+{
+  "label_schema_version": "ew-test-documents-v1",
+  "labels": [
+    {
+      "label": "claim_form_n1",
+      "form_code": "N1",
+      "document_type": "claim_form",
+      "source_registry_id": "form-n1",
+      "ruleset": "CPR",
+      "required_fields": ["claim_number", "case_title", "claimant", "defendant", "value_band"]
+    },
+    {
+      "label": "acknowledgment_of_service_n9",
+      "form_code": "N9",
+      "document_type": "acknowledgment_of_service",
+      "source_registry_id": "form-n9",
+      "ruleset": "CPR",
+      "required_fields": ["aos_status", "jurisdiction_challenge_flag"]
+    },
+    {
+      "label": "defence_n9b",
+      "form_code": "N9B",
+      "document_type": "defence",
+      "source_registry_id": "form-n9b",
+      "ruleset": "CPR",
+      "required_fields": ["defence_status", "counterclaim_flag"]
+    },
+    {
+      "label": "directions_questionnaire_n180",
+      "form_code": "N180",
+      "document_type": "directions_questionnaire",
+      "source_registry_id": "form-n180",
+      "track": "small_claims",
+      "required_fields": ["track", "mediation_flag"]
+    },
+    {
+      "label": "directions_questionnaire_n181",
+      "form_code": "N181",
+      "document_type": "directions_questionnaire",
+      "source_registry_id": "form-n181",
+      "track": "fast_intermediate_or_multi",
+      "required_fields": ["track", "experts_flag", "trial_length_estimate"]
+    },
+    {
+      "label": "notice_of_change_n434",
+      "form_code": "N434",
+      "document_type": "notice_of_change",
+      "source_registry_id": "form-n434",
+      "required_fields": ["solicitor_on_record", "N434_status", "notice_filed_date", "notice_served_on_parties"]
+    },
+    {
+      "label": "small_claims_appeal_n164",
+      "form_code": "N164",
+      "document_type": "appeal_notice",
+      "source_registry_id": "form-n164",
+      "required_fields": ["appeal_type", "small_claims_appeal_flag"],
+      "classification_warning": "Do not classify as respondent notice."
+    }
+  ]
+}

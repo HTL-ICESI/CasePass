@@ -1,0 +1,97 @@
+{
+  "registry_version": "ew-civil-forms-mvp-v1",
+  "trust_tier": "A",
+  "sources": [
+    {
+      "id": "form-n1",
+      "form_code": "N1",
+      "document_name": "Form N1 - Claim form (CPR Part 7)",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n1-claim-form-cpr-part-7",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field",
+      "metadata_fields": ["document_type", "claim_number", "parties", "value_band", "claim_summary", "hearing_centre"],
+      "workflow_gates": ["ingest", "pleadings-validation", "forum-detection"]
+    },
+    {
+      "id": "form-n9",
+      "form_code": "N9",
+      "document_name": "Form N9 - Response pack / acknowledgment of service",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n9-response-pack",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field",
+      "metadata_fields": ["document_type", "aos_flag", "jurisdiction_challenge_flag"],
+      "workflow_gates": ["response-deadline"]
+    },
+    {
+      "id": "form-n9b",
+      "form_code": "N9B",
+      "document_name": "Form N9B - Defence and Counterclaim",
+      "canonical_url": "https://assets.publishing.service.gov.uk/media/664cb108b7249a4c6e9d38da/N9B_0524_save.pdf",
+      "pdf_available": true,
+      "pinpoint_policy": "PDF page/field",
+      "metadata_fields": ["document_type", "defence_scope", "admission_amount", "counterclaim_flag"],
+      "workflow_gates": ["pleadings-validation", "response-deadline"]
+    },
+    {
+      "id": "form-n170",
+      "form_code": "N170",
+      "document_name": "Form N170 - Listing questionnaire / pre-trial checklist",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n170-listing-questionnaire-pre-trial-checklist",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field",
+      "metadata_fields": ["document_type", "trial_readiness", "trial_window", "compliance_with_directions"],
+      "workflow_gates": ["hearing-readiness"]
+    },
+    {
+      "id": "form-n180",
+      "form_code": "N180",
+      "document_name": "Form N180 - Directions questionnaire - small claims track",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n180-directions-questionnaire-small-claims-track",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field",
+      "metadata_fields": ["document_type", "track", "mediation_flag", "hearing_language", "dq_service_flag"],
+      "workflow_gates": ["allocation-dq"]
+    },
+    {
+      "id": "form-n181",
+      "form_code": "N181",
+      "document_name": "Form N181 - Directions questionnaire - fast track, intermediate track or multi-track",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n181-directions-questionnaire-fast-track-and-multi-track",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field",
+      "metadata_fields": ["document_type", "track", "complexity_band_candidate", "experts_flag", "trial_length_estimate"],
+      "workflow_gates": ["allocation-dq"]
+    },
+    {
+      "id": "form-n244",
+      "form_code": "N244",
+      "document_name": "Form N244 - Application notice",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n244-application-notice",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field",
+      "metadata_fields": ["document_type", "order_sought", "draft_order_flag", "hearing_mode", "hearing_length", "judge_level", "service_list"],
+      "workflow_gates": ["interim-application", "hearing-readiness"]
+    },
+    {
+      "id": "form-n434",
+      "form_code": "N434",
+      "document_name": "Form N434 - Notice of change of solicitor",
+      "canonical_url": "https://www.gov.uk/government/publications/form-n434-notice-of-change-of-solicitor",
+      "pdf_available": true,
+      "pinpoint_policy": "publication page plus PDF page/field plus PD 42 para.2.5",
+      "metadata_fields": ["document_type", "outgoing_representative", "incoming_representative", "solicitor_on_record", "address_for_service"],
+      "workflow_gates": ["representation-check", "handoff-acceptance"]
+    },
+    {
+      "id": "form-n164",
+      "form_code": "N164",
+      "document_name": "Form N164 - Appeal an order in a case allocated to the small claims track",
+      "canonical_url": "https://www.gov.uk/government/collections/county-court-forms",
+      "pdf_available": true,
+      "pinpoint_policy": "County Court forms collection entry plus PDF page/field",
+      "metadata_fields": ["document_type", "appeal_type", "small_claims_appeal_flag"],
+      "workflow_gates": ["appeal", "rejection-rules"],
+      "warning": "Do not map N164 to respondent notice. Respondent-side appeal logic belongs under CPR 52.13."
+    }
+  ]
+}
