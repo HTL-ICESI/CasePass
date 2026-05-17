@@ -1,11 +1,13 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { Download, FileText, Printer } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Download, FileText, Loader2, Printer } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Citation, Handoff, MatterReview } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CitationChip } from "@/components/app/citation-chip";
+import { useAuth } from "@/lib/auth";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/note")({
   head: () => ({ meta: [{ title: "Handover note — CasePass" }] }),
@@ -14,6 +16,8 @@ export const Route = createFileRoute("/_authenticated/handoffs/$id/note")({
 
 function NotePage() {
   const { id } = Route.useParams();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const handoff = useQuery({
     queryKey: ["handoff", id],
@@ -28,12 +32,44 @@ function NotePage() {
     queryFn: () => api.getMatterReview(id),
   });
 
+  const generateNote = useMutation({
+    mutationFn: () => api.createHandoverNote(id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+        queryClient.invalidateQueries({ queryKey: ["matter-review", id] }),
+      ]);
+      toast.success("Handover note generated.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate the handover note."),
+  });
+
+  const approveNote = useMutation({
+    mutationFn: () => api.approveHandoverNote(id, h?.noteId || "", { approved: true, text: "Approved from frontend workflow." }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
+      toast.success("Handover note approved.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not approve the note."),
+  });
+
+  const releasePack = useMutation({
+    mutationFn: () => api.releaseHandoffPack(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
+      toast.success("Handover pack released.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not release the handoff pack."),
+  });
+
   if (handoff.isLoading || review.isLoading) {
     return <Skeleton className="h-[600px] w-full" />;
   }
 
   const h = handoff.data;
   const r = review.data;
+  const isSender = Boolean(user && h && h.ownerId === user.id);
+  const note = h?.latestNote;
   if (!h || !r) {
     return (
       <p className="text-sm text-muted-foreground">No handover note available for this matter.</p>
@@ -54,6 +90,24 @@ function NotePage() {
           Auto-generated brief · grounded in indexed documents
         </div>
         <div className="flex items-center gap-2 print:hidden">
+          {isSender && h?.backendStatus === "pack_building" && (
+            <Button variant="outline" size="sm" onClick={() => generateNote.mutate()} disabled={generateNote.isPending}>
+              {generateNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Generate note
+            </Button>
+          )}
+          {isSender && h?.backendStatus === "pack_review" && h?.noteId && !h.noteApproved && (
+            <Button variant="outline" size="sm" onClick={() => approveNote.mutate()} disabled={approveNote.isPending}>
+              {approveNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Approve note
+            </Button>
+          )}
+          {isSender && h?.backendStatus === "pack_review" && h?.noteApproved && (
+            <Button variant="outline" size="sm" onClick={() => releasePack.mutate()} disabled={releasePack.isPending}>
+              {releasePack.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Release pack
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={onPrint}>
             <Printer className="h-3.5 w-3.5" /> Print
           </Button>
@@ -88,11 +142,13 @@ function NotePage() {
         </header>
 
         <Block title="Executive summary">
-          <p className="text-sm leading-relaxed text-foreground">{h.summary}</p>
+          <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+            {note?.executiveSummary || h.summary}
+          </p>
         </Block>
 
         <Block title="Where we stand">
-          <p className="font-display text-base font-medium text-foreground">{r.stage}</p>
+          <p className="font-display text-base font-medium text-foreground">{note?.currentProceduralStatus || r.stage}</p>
           <p className="mt-3 text-sm leading-relaxed text-foreground">
             {r.lastEvent.text}{" "}
             {r.lastEvent.citation && <CitationChip citation={r.lastEvent.citation} />}
@@ -100,11 +156,11 @@ function NotePage() {
         </Block>
 
         <Block title="Urgent issues">
-          {r.urgentIssues.length === 0 ? (
+          {(note?.riskFlags?.length || r.urgentIssues.length) === 0 ? (
             <p className="text-sm text-muted-foreground">None flagged.</p>
           ) : (
             <ol className="space-y-3 text-sm leading-relaxed text-foreground">
-              {r.urgentIssues.map((u, i) => (
+              {(note?.riskFlags || r.urgentIssues).map((u, i) => (
                 <li key={i} className="flex gap-3">
                   <span className="font-mono text-[10px] text-muted-foreground pt-0.5">
                     {String(i + 1).padStart(2, "0")}
@@ -119,11 +175,17 @@ function NotePage() {
         </Block>
 
         <Block title="Deadlines">
-          {h.deadlines.length === 0 ? (
+          {(note?.liveDeadlines?.length || h.deadlines.length) === 0 ? (
             <p className="text-sm text-muted-foreground">None scheduled.</p>
           ) : (
             <ul className="space-y-2 text-sm text-foreground">
-              {h.deadlines.map((d) => (
+              {note?.liveDeadlines?.length ? note.liveDeadlines.map((d, index) => (
+                <li key={`note-${index}`} className="flex items-baseline justify-between gap-4">
+                  <span>
+                    {d.text} {d.citation && <CitationChip citation={d.citation} />}
+                  </span>
+                </li>
+              )) : h.deadlines.map((d) => (
                 <li key={d.id} className="flex items-baseline justify-between gap-4">
                   <span>
                     {d.label}{" "}
@@ -155,10 +217,32 @@ function NotePage() {
 
         <Block title="Recommended next step">
           <p className="text-sm leading-relaxed text-foreground">
-            {r.nextStep.text}{" "}
-            {r.nextStep.citation && <CitationChip citation={r.nextStep.citation} />}
+            {(note?.nextRequiredStep || r.nextStep.text)}{" "}
+            {!note?.nextRequiredStep && r.nextStep.citation && <CitationChip citation={r.nextStep.citation} />}
           </p>
         </Block>
+
+        {note?.fileBasedFacts && note.fileBasedFacts.length > 0 && (
+          <Block title="File-based facts">
+            <ul className="space-y-3 text-sm leading-relaxed text-foreground">
+              {note.fileBasedFacts.map((fact, index) => (
+                <li key={index}>
+                  {fact.text} {fact.citation && <CitationChip citation={fact.citation} />}
+                </li>
+              ))}
+            </ul>
+          </Block>
+        )}
+
+        {note?.strategicNotes && note.strategicNotes.length > 0 && (
+          <Block title="Strategic notes">
+            <ul className="space-y-3 text-sm leading-relaxed text-foreground">
+              {note.strategicNotes.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+          </Block>
+        )}
 
         <footer className="mt-10 border-t border-border pt-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
           Generated by CasePass · All assertions are grounded in cited documents.

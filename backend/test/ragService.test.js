@@ -29,3 +29,14 @@ test('chunkText keeps sentence boundaries and returns metadata-rich chunks', () 
   assert.equal(typeof chunks[0].metadata.char_end, 'number');
   assert.equal(typeof chunks[0].metadata.token_estimate, 'number');
 });
+
+test('chunkText splits oversized extracted text instead of returning a single overlong chunk', () => {
+  const longSegment = Array.from({ length: 700 }, (_, index) => `word${index}`).join(' ');
+  const text = `${longSegment}.`;
+  const pageMap = [{ page: 1, char_offset: 0 }];
+  const chunks = chunkText(text, 'n1-form.pdf', pageMap, 220, 20);
+
+  assert.equal(chunks.length > 1, true);
+  assert.equal(chunks.every((chunk) => chunk.metadata.token_estimate <= 240), true);
+  assert.equal(chunks[0].metadata.doc_name, 'n1-form.pdf');
+});

@@ -12,4 +12,11 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      proxy: {
+        "/api": process.env.CASEPASS_API_PROXY_TARGET || "http://127.0.0.1:4102",
+      },
+    },
+  },
 });

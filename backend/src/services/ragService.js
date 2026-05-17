@@ -172,8 +172,61 @@ function takeOverlapSentences(sentences, overlapTokens) {
   return overlap;
 }
 
+function splitOversizedSentence(sentence, chunkSize) {
+  const words = Array.from(sentence.text.matchAll(/\S+/g));
+  if (words.length === 0) {
+    return [sentence];
+  }
+
+  const segments = [];
+  let currentWords = [];
+
+  for (const wordMatch of words) {
+    currentWords.push(wordMatch);
+
+    if (currentWords.length >= chunkSize) {
+      const first = currentWords[0];
+      const last = currentWords[currentWords.length - 1];
+      const relativeStart = first.index || 0;
+      const relativeEnd = (last.index || 0) + last[0].length;
+      segments.push({
+        text: sentence.text.slice(relativeStart, relativeEnd).trim(),
+        start: sentence.start + relativeStart,
+        end: sentence.start + relativeEnd,
+        tokenCount: currentWords.length,
+      });
+      currentWords = [];
+    }
+  }
+
+  if (currentWords.length > 0) {
+    const first = currentWords[0];
+    const last = currentWords[currentWords.length - 1];
+    const relativeStart = first.index || 0;
+    const relativeEnd = (last.index || 0) + last[0].length;
+    segments.push({
+      text: sentence.text.slice(relativeStart, relativeEnd).trim(),
+      start: sentence.start + relativeStart,
+      end: sentence.start + relativeEnd,
+      tokenCount: currentWords.length,
+    });
+  }
+
+  return segments.length > 0 ? segments : [sentence];
+}
+
+function getEmbeddingChunkConfig() {
+  if (/multilingual-e5-base/i.test(embeddingModel)) {
+    return { chunkSize: 220, overlap: 20 };
+  }
+
+  return { chunkSize: 500, overlap: 50 };
+}
+
 function chunkText(text, docName, pageMap, chunkSize = 500, overlap = 50) {
-  const sentences = splitSentences(text);
+  const sentences = splitSentences(text).flatMap((sentence) => (
+    sentence.tokenCount > chunkSize ? splitOversizedSentence(sentence, chunkSize) : [sentence]
+  ));
 
   if (sentences.length === 0) {
     return [];
@@ -188,7 +241,15 @@ function chunkText(text, docName, pageMap, chunkSize = 500, overlap = 50) {
 
     if (wouldOverflow) {
       chunks.push(buildChunkFromSentences(currentSentences, docName, pageMap, chunks.length));
-      currentSentences = [...takeOverlapSentences(currentSentences, overlap), sentence];
+      const overlapSentences = takeOverlapSentences(currentSentences, overlap);
+      const overlapTokens = overlapSentences.reduce((total, item) => total + item.tokenCount, 0);
+
+      if (overlapTokens > 0 && overlapTokens + sentence.tokenCount <= chunkSize) {
+        currentSentences = [...overlapSentences, sentence];
+      } else {
+        currentSentences = [sentence];
+      }
+
       currentTokens = currentSentences.reduce((total, item) => total + item.tokenCount, 0);
       continue;
     }
@@ -205,12 +266,13 @@ function chunkText(text, docName, pageMap, chunkSize = 500, overlap = 50) {
 }
 
 async function extractChunksFromBuffer(buffer, docName) {
+  const { chunkSize, overlap } = getEmbeddingChunkConfig();
   const isPdf = String(buffer.slice(0, 4)) === '%PDF';
 
   if (!isPdf) {
     const text = buffer.toString('utf8').trim();
     const pageMap = [{ page: 1, char_offset: 0 }];
-    return chunkText(text, docName, pageMap);
+    return chunkText(text, docName, pageMap, chunkSize, overlap);
   }
 
   const pdfPages = [];
@@ -238,7 +300,7 @@ async function extractChunksFromBuffer(buffer, docName) {
   }
 
   const pageMap = buildPageMap(pdfPages);
-  return chunkText(combinedText, docName, pageMap);
+  return chunkText(combinedText, docName, pageMap, chunkSize, overlap);
 }
 
 async function loadFallbackChunksFromStorage(handoffId) {

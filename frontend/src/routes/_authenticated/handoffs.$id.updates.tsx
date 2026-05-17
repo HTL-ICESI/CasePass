@@ -23,11 +23,16 @@ function UpdatesPage() {
   const { id } = Route.useParams();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const handoff = useQuery({
+    queryKey: ["handoff", id],
+    queryFn: () => api.getHandoff(id),
+  });
 
   const { data: updates, isLoading } = useQuery({
     queryKey: ["matter-updates", id],
     queryFn: () => api.listUpdates(id),
   });
+  const isReceiver = Boolean(user && handoff.data && handoff.data.receivingId === user.id);
 
   const [whatWasDone, setWhatWasDone] = useState("");
   const [whatHappened, setWhatHappened] = useState("");
@@ -62,6 +67,31 @@ function UpdatesPage() {
       toast.success("Update logged", { description: "Timeline refreshed." });
       reset();
     },
+  });
+
+  const verifyMutation = useMutation({
+    mutationFn: async () => {
+      const latest = updates?.[0];
+      if (!latest) throw new Error("No update available to verify.");
+      return api.verifyUpdate(id, latest.id, { approved: true, text: "Verified from frontend workflow." }, latest.rawStatus || latest.whatFollows);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["matter-updates", id] }),
+        queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+      ]);
+      toast.success("Update verified.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not verify the update."),
+  });
+
+  const routeMutation = useMutation({
+    mutationFn: () => api.routeHandoff(id, "new_instructed_solicitor"),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
+      toast.success("Handoff routed.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not route the handoff."),
   });
 
   const addAttachment = () => {
@@ -210,6 +240,18 @@ function UpdatesPage() {
             <Send className="h-3.5 w-3.5" />
             {mutation.isPending ? "Logging…" : "Log update"}
           </Button>
+
+          {isReceiver && handoff.data?.backendStatus === "update_draft" && (
+            <Button type="button" variant="outline" className="w-full" onClick={() => verifyMutation.mutate()} disabled={verifyMutation.isPending || !updates?.length}>
+              {verifyMutation.isPending ? "Verifying…" : "Verify latest update"}
+            </Button>
+          )}
+
+          {isReceiver && handoff.data?.backendStatus === "update_verified" && (
+            <Button type="button" variant="outline" className="w-full" onClick={() => routeMutation.mutate()} disabled={routeMutation.isPending}>
+              {routeMutation.isPending ? "Routing…" : "Route handoff"}
+            </Button>
+          )}
         </form>
       </aside>
     </div>

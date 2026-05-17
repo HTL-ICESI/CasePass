@@ -1,5 +1,3 @@
-// Domain types for CasePass. Shared between mock and (future) REST client.
-
 export type MatterStatus =
   | "intake"
   | "indexed"
@@ -7,20 +5,8 @@ export type MatterStatus =
   | "in-review"
   | "closed";
 
-export type MatterType =
-  | "Commercial litigation"
-  | "Employment"
-  | "Real estate"
-  | "Insolvency"
-  | "Regulatory"
-  | "Family";
-
-export type Court =
-  | "Commercial Court"
-  | "High Court (KBD)"
-  | "Employment Tribunal"
-  | "County Court"
-  | "Court of Appeal";
+export type MatterType = string;
+export type Court = string;
 
 export type PrivilegeFlag = "none" | "client-privilege" | "work-product";
 
@@ -35,9 +21,15 @@ export type Document = {
   privilege: PrivilegeFlag;
   status: DocumentStatus;
   uploadedAt: string;
+  rawPageCount?: number | null;
 };
 
-export type Citation = { doc: string; page: number };
+export type Citation = {
+  doc: string;
+  page: number;
+  preview?: string;
+  score?: number;
+};
 
 export type Chunk = {
   id: string;
@@ -60,6 +52,8 @@ export type MatterUpdate = {
   hearingAt?: string;
   attachments: string[];
   citations: Citation[];
+  verified?: boolean;
+  rawStatus?: string;
 };
 
 export type CreateUpdateInput = {
@@ -103,15 +97,18 @@ export type MatterReview = {
   urgentIssues: ReviewNote[];
   missingDocs: string[];
   nextStep: ReviewNote;
+  liveDeadlines?: ReviewNote[];
 };
 
 export type Handoff = {
   id: string;
+  caseId: string;
   caseName: string;
   matterType: MatterType;
   court: Court;
   parties: { plaintiff: string; defendant: string };
   status: MatterStatus;
+  backendStatus: string;
   ownerId: string;
   receivingId?: string;
   createdAt: string;
@@ -120,6 +117,20 @@ export type Handoff = {
   documentsCount: number;
   pagesIndexed: number;
   deadlines: Deadline[];
+  handoffType?: string | null;
+  noticeOfChangeRequired?: boolean;
+  noteId?: string | null;
+  noteApproved?: boolean;
+  latestReview?: MatterReview | null;
+  latestNote?: {
+    executiveSummary?: string;
+    currentProceduralStatus?: string;
+    nextRequiredStep?: string;
+    liveDeadlines?: ReviewNote[];
+    riskFlags?: ReviewNote[];
+    fileBasedFacts?: ReviewNote[];
+    strategicNotes?: string[];
+  } | null;
 };
 
 export type ListHandoffsParams = {
@@ -138,8 +149,9 @@ export type CreateHandoffInput = {
   defendant: string;
   nextHearingAt?: string;
   summary: string;
-  files: { name: string; size: number; pages: number }[];
+  files: { name: string; size: number; pages: number; file?: File }[];
   ownerId: string;
+  receiverId: string;
 };
 
 export type DashboardKpis = {
@@ -147,4 +159,21 @@ export type DashboardKpis = {
   deadlinesThisWeek: number;
   pendingHandoffs: number;
   pagesIndexed: number;
+};
+
+export type FirmUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: "solicitor" | "receiving" | "admin";
+  title: string;
+  legalRole?: string | null;
+  activeMatters: number;
+  status: "active" | "invited" | "disabled";
+  joinedAt: string;
+};
+
+export type ReviewActionResult = {
+  handoff?: Handoff;
+  review?: MatterReview | null;
 };

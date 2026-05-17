@@ -1,10 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Calendar, FileMinus, Compass, Activity } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Calendar, FileMinus, Compass, Activity, Loader2 } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { CitationChip } from "@/components/app/citation-chip";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/")({
   head: () => ({ meta: [{ title: "Overview — CasePass" }] }),
@@ -13,6 +16,8 @@ export const Route = createFileRoute("/_authenticated/handoffs/$id/")({
 
 function OverviewPage() {
   const { id } = Route.useParams();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const review = useQuery({
     queryKey: ["matter-review", id],
     queryFn: () => api.getMatterReview(id),
@@ -20,6 +25,27 @@ function OverviewPage() {
   const handoff = useQuery({
     queryKey: ["handoff", id],
     queryFn: () => api.getHandoff(id),
+  });
+
+  const approveClearance = useMutation({
+    mutationFn: () => api.approveClearance(id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+        queryClient.invalidateQueries({ queryKey: ["handoffs"] }),
+      ]);
+      toast.success("Clearance approved.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not approve clearance."),
+  });
+
+  const acceptHandoff = useMutation({
+    mutationFn: () => api.acceptHandoff(id, "limited"),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
+      toast.success("Handoff accepted.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not accept the handoff."),
   });
 
   if (review.isLoading || handoff.isLoading) {
@@ -33,6 +59,7 @@ function OverviewPage() {
 
   const r = review.data;
   const h = handoff.data;
+  const isReceiver = Boolean(user && h && h.receivingId === user.id);
 
   if (!r || !h) {
     return (
@@ -85,6 +112,20 @@ function OverviewPage() {
             {r.nextStep.text}{" "}
             {r.nextStep.citation && <CitationChip citation={r.nextStep.citation} />}
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {isReceiver && h.backendStatus === "clearance_pending" && (
+              <Button size="sm" onClick={() => approveClearance.mutate()} disabled={approveClearance.isPending}>
+                {approveClearance.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Approve clearance
+              </Button>
+            )}
+            {isReceiver && h.backendStatus === "pack_released" && (
+              <Button size="sm" onClick={() => acceptHandoff.mutate()} disabled={acceptHandoff.isPending}>
+                {acceptHandoff.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Accept handoff
+              </Button>
+            )}
+          </div>
         </Section>
       </div>
 

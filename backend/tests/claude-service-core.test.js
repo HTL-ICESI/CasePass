@@ -236,6 +236,44 @@ describe('claudeService core', () => {
     delete process.env.CHAT_MODEL;
   });
 
+  test('chatWithSources falls back to grounded chunk sentences when provider returns reasoning-heavy text', async () => {
+    jest.resetModules();
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.AI_API_KEY = 'provider-key';
+    process.env.AI_BASE_URL = 'https://api.totalgpt.ai';
+    process.env.CHAT_MODEL = 'Qwen-Qwen3.6-35B-A3B';
+
+    const create = jest.fn().mockResolvedValue({
+      choices: [{ message: { content: 'Here is a thinking process:\n1. analyse\n2. answer' } }],
+      usage: { prompt_tokens: 77, completion_tokens: 21 },
+    });
+
+    jest.doMock('openai', () => ({
+      OpenAI: jest.fn().mockImplementation(() => ({
+        chat: { completions: { create } },
+      })),
+    }));
+    jest.doMock('@anthropic-ai/sdk', () => ({
+      Anthropic: jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })),
+    }));
+
+    const service = require('../src/services/claudeService');
+    const chunks = [{ text: 'The next procedural step is to file witness evidence before the hearing.', doc_name: 'order.pdf', page: 3, chunk_index: 0, score: 0.9 }];
+    const result = await service.chatWithSources('What is the next procedural step?', chunks, {
+      handoff_id: 'handoff-provider-fallback',
+      case_title: 'Provider matter',
+      forum: 'county_court',
+      claimant: 'Claimant Ltd',
+      defendant: 'Defendant Ltd',
+    });
+
+    expect(result.answer).toContain('[Doc: order.pdf, p.3]');
+
+    delete process.env.AI_API_KEY;
+    delete process.env.AI_BASE_URL;
+    delete process.env.CHAT_MODEL;
+  });
+
   test('reviewMatter uses json_object response format with OpenAI-compatible provider', async () => {
     jest.resetModules();
     delete process.env.ANTHROPIC_API_KEY;

@@ -1,5 +1,5 @@
 const express = require('express');
-const { searchChunks } = require('../services/ragService');
+const { searchChunks, getIndexedChunksForHandoff } = require('../services/ragService');
 const { chatWithSources } = require('../services/claudeService');
 const { query } = require('../db');
 
@@ -81,7 +81,11 @@ router.post('/cases/:id/chat', async (req, res) => {
       });
     }
 
-    const chunks = await searchChunks(question, resolvedHandoffId, 5);
+    let chunks = await searchChunks(question, resolvedHandoffId, 5);
+
+    if (chunks.length === 0 || chunks.every((chunk) => chunk.score < 0.5)) {
+      chunks = await getIndexedChunksForHandoff(resolvedHandoffId, 5);
+    }
 
     if (chunks.length === 0 || chunks.every((chunk) => chunk.score < 0.5)) {
       return res.json({

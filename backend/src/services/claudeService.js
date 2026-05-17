@@ -125,6 +125,60 @@ function extractDocCitations(text) {
   return citations;
 }
 
+function buildGroundedChatAnswer(question, chunks) {
+  const queryTerms = new Set(String(question || '').toLowerCase().split(/[^a-z0-9]+/i).filter((term) => term.length > 3));
+  const questionText = String(question || '').toLowerCase();
+
+  if (/deadline|date|hearing/i.test(questionText)) {
+    ['due', 'date', 'hearing', 'issue', 'delivery', 'issued'].forEach((term) => queryTerms.add(term));
+  }
+
+  if (/step|procedural|next/i.test(questionText)) {
+    ['step', 'prepare', 'file', 'issued', 'allocated', 'review'].forEach((term) => queryTerms.add(term));
+  }
+
+  const sentences = chunks.flatMap((chunk) => String(chunk.text || '')
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .map((sentence) => ({
+      sentence,
+      doc_name: chunk.doc_name,
+      page: chunk.page,
+      score: chunk.score,
+      overlap: Array.from(queryTerms).filter((term) => sentence.toLowerCase().includes(term)).length,
+      dateLike: /\b\d{1,2}\s+[A-Z][a-z]+\s+\d{4}\b|\bdue\b|\bissue date\b|\bhearing\b/i.test(sentence),
+    })));
+
+  let ranked = sentences
+    .filter((entry) => entry.overlap > 0)
+    .sort((left, right) => (right.overlap - left.overlap) || (right.score - left.score))
+    .slice(0, 3);
+
+  if (ranked.length === 0) {
+    ranked = sentences
+      .filter((entry) => entry.dateLike)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3);
+  }
+
+  if (ranked.length === 0) {
+    return {
+      answer: 'Insufficient evidence in the file to answer this question.',
+      sources: [],
+    };
+  }
+
+  const answer = ranked
+    .map((entry) => `${entry.sentence} [Doc: ${entry.doc_name}, p.${entry.page}]`)
+    .join(' ');
+
+  return {
+    answer,
+    sources: mapCitationsToSources([answer], chunks),
+  };
+}
+
 function mapCitationsToSources(strings, chunks) {
   const uniqueSources = new Map();
 
@@ -287,7 +341,11 @@ QUESTION: ${question}`;
   const answer = await callClaude(handoffId, systemPrompt, userMessage, 1000);
 
   if (answer === 'Insufficient evidence in the file to answer this question.') {
-    return { answer, sources: [] };
+    return buildGroundedChatAnswer(question, relevantChunks);
+  }
+
+  if (/thinking process/i.test(answer) || extractDocCitations(answer).length === 0) {
+    return buildGroundedChatAnswer(question, relevantChunks);
   }
 
   const sources = mapCitationsToSources([answer], relevantChunks);

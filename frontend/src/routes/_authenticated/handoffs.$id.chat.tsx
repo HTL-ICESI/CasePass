@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/chat")({
   head: () => ({ meta: [{ title: "Chat — CasePass" }] }),
@@ -53,6 +54,15 @@ function ChatPage() {
         setActiveChunk(answer.citations[0].chunkId);
       }
     },
+    onError: (error, question) => {
+      const message = error instanceof Error ? error.message : "Chat request failed.";
+      toast.error(message);
+      setMessages((prev) => [
+        ...prev,
+        { id: `m_${Date.now()}_u`, role: "user", text: question },
+        { id: `m_${Date.now()}_e`, role: "assistant", text: message, insufficient: true, citations: [] },
+      ]);
+    },
   });
 
   useEffect(() => {
@@ -69,6 +79,19 @@ function ChatPage() {
     setInput("");
     ask.mutate(q);
   }
+
+  const sourcedChunks: Array<Chunk & { score?: number }> = messages
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => (message.citations || []).map((citation) => ({
+      id: citation.chunkId,
+      doc: citation.doc,
+      page: citation.page,
+      excerpt: citation.preview || `${citation.doc} · page ${citation.page}`,
+      score: citation.score,
+    })))
+    .filter((chunk, index, array) => array.findIndex((entry) => entry.id === chunk.id) === index);
+
+  const visibleChunks = sourcedChunks.length > 0 ? sourcedChunks : (chunks.data ?? []);
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
@@ -159,7 +182,7 @@ function ChatPage() {
               <Skeleton className="h-24 w-full" />
             </>
           ) : (
-            (chunks.data ?? []).map((c) => (
+            visibleChunks.map((c) => (
               <ChunkCard
                 key={c.id}
                 chunk={c}
@@ -314,7 +337,7 @@ function ChunkCard({
   active,
   onClick,
 }: {
-  chunk: Chunk;
+  chunk: Chunk & { score?: number };
   active: boolean;
   onClick: () => void;
 }) {
@@ -329,15 +352,22 @@ function ChunkCard({
           : "border-border hover:border-foreground/30",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
         <FileText className="h-3.5 w-3.5 text-muted-foreground" />
         <p className="truncate font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
           {chunk.doc} · p.{chunk.page}
         </p>
+        </div>
+        {typeof chunk.score === "number" && (
+          <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-indigo">
+            {Math.round(chunk.score * 100)}%
+          </span>
+        )}
       </div>
       <p
         className={cn(
-          "mt-2 text-xs leading-relaxed",
+          "mt-2 whitespace-pre-wrap text-xs leading-relaxed",
           active ? "text-foreground" : "text-muted-foreground",
         )}
       >

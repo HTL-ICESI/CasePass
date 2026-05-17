@@ -5,7 +5,6 @@ import { Building2, Layers, Calendar, FileText, ArrowUpRight } from "lucide-reac
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
-import { MOCK_USERS } from "@/lib/api/mock-users";
 import type { Handoff, MatterStatus } from "@/lib/api";
 
 export const Route = createFileRoute("/_authenticated/admin/")({
@@ -27,10 +26,18 @@ function AdminHome() {
     queryFn: () => api.listHandoffs(),
     enabled: !!user,
   });
+  const usersQuery = useQuery({
+    queryKey: ["admin-users"],
+    queryFn: () => api.listUsers(),
+    enabled: !!user,
+  });
 
   const matters = list.data ?? [];
-  const solicitors = MOCK_USERS.filter((u) => u.role === "solicitor").length;
-  const receivers = MOCK_USERS.filter((u) => u.role === "receiving").length;
+  const firmUsers = usersQuery.data ?? [];
+  const solicitors = firmUsers.filter((u) => u.role === "solicitor").length;
+  const receivers = firmUsers.filter((u) => u.role === "receiving").length;
+  const admins = firmUsers.filter((u) => u.role === "admin").length;
+  const disabled = firmUsers.filter((u) => u.status === "disabled").length;
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-10">
@@ -77,8 +84,8 @@ function AdminHome() {
           <dl className="mt-4 space-y-3 text-sm">
             <Row label="Solicitors" value={solicitors} />
             <Row label="Receiving counsel" value={receivers} />
-            <Row label="Admins" value={MOCK_USERS.filter((u) => u.role === "admin").length} />
-            <Row label="Pending invites" value={MOCK_USERS.filter((u) => u.status === "invited").length} muted />
+            <Row label="Admins" value={admins} />
+            <Row label="Disabled users" value={disabled} muted />
           </dl>
           <Link
             to="/admin/users"

@@ -1,10 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ShieldCheck, ShieldAlert, Shield, FileText, Loader2, CircleAlert } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { ShieldCheck, ShieldAlert, Shield, FileText, Loader2, CircleAlert, UploadCloud } from "lucide-react";
 
 import { api } from "@/lib/api";
 import type { Document, DocumentStatus, PrivilegeFlag } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/sources")({
   head: () => ({ meta: [{ title: "Source register — CasePass" }] }),
@@ -13,19 +17,83 @@ export const Route = createFileRoute("/_authenticated/handoffs/$id/sources")({
 
 function SourcesPage() {
   const { id } = Route.useParams();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const handoff = useQuery({
+    queryKey: ["handoff", id],
+    queryFn: () => api.getHandoff(id),
+  });
   const { data, isLoading } = useQuery({
     queryKey: ["documents", id],
     queryFn: () => api.listDocuments(id),
   });
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => api.uploadHandoffDocument(id, file),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["documents", id] }),
+        queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+      ]);
+      toast.success("Document uploaded.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not upload document."),
+  });
+
+  const canUpload = Boolean(user && handoff.data && handoff.data.ownerId === user.id && handoff.data.backendStatus === "file_upload_open");
+
+  useEffect(() => {
+    if (!canUpload || uploadMutation.isPending || !data?.some((document) => document.status === "processing" && document.chunks === 0)) {
+      return;
+    }
+
+    api.flushStagedUploads(id)
+      .then(async (uploaded) => {
+        if (uploaded.length > 0) {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["documents", id] }),
+            queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+          ]);
+          toast.success(`Uploaded ${uploaded.length} staged document${uploaded.length > 1 ? "s" : ""}.`);
+        }
+      })
+      .catch(() => {
+        // keep staged files visible until a later retry
+      });
+  }, [canUpload, data, id, queryClient, uploadMutation.isPending]);
 
   return (
     <section className="rounded-2xl border border-border bg-surface shadow-[var(--shadow-1)]">
       <header className="border-b border-border/70 px-5 py-4">
-        <h2 className="font-display text-lg font-semibold">Source register</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Every document indexed for this matter. Citations on the Overview tab reference these
-          files.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg font-semibold">Source register</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Every document indexed for this matter. Citations on the Overview tab reference these files.
+            </p>
+          </div>
+          {canUpload && (
+            <>
+              <input
+                ref={inputRef}
+                type="file"
+                hidden
+                accept="application/pdf,.pdf"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    uploadMutation.mutate(file);
+                  }
+                  event.target.value = "";
+                }}
+              />
+              <Button size="sm" onClick={() => inputRef.current?.click()} disabled={uploadMutation.isPending}>
+                {uploadMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
+                Upload PDF
+              </Button>
+            </>
+          )}
+        </div>
       </header>
 
       {isLoading ? (

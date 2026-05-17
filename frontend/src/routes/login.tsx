@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth, type Role, ROLE_LABEL } from "@/lib/auth";
+import { useAuth } from "@/lib/auth";
 import { CasePassLogo } from "@/components/brand/logo";
 import { ThemeToggle } from "@/components/app/theme-toggle";
 
@@ -20,37 +20,32 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-const DEMO_EMAILS: Record<Role, string> = {
-  solicitor: "eleanor@hayes-whitman.law",
-  receiving: "james@hayes-whitman.law",
-  admin: "margot@hayes-whitman.law",
-};
-
 function LoginPage() {
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
-  const [role, setRole] = useState<Role>("solicitor");
-  const [email, setEmail] = useState(DEMO_EMAILS.solicitor);
-  const [password, setPassword] = useState("demo-pass");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAuthenticated) navigate({ to: "/dashboard" });
   }, [isAuthenticated, navigate]);
 
-  useEffect(() => { setEmail(DEMO_EMAILS[role]); }, [role]);
-
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!email || !password) return;
     setSubmitting(true);
+    setError(null);
     try {
-      await login(email, password, role);
-      toast.success(`Welcome, ${ROLE_LABEL[role].toLowerCase()}`);
+      await login(email, password);
+      toast.success("Signed in successfully.");
       navigate({ to: "/dashboard" });
-    } catch {
-      toast.error("Could not sign you in.");
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Could not sign you in.";
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }
@@ -69,40 +64,10 @@ function LoginPage() {
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-indigo">Sign in</p>
           <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight">Open your workspace</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This is a working demo. Pick a role to explore the matter you'd be handed.
+            Sign in with a real CasePass account. This screen now authenticates against the backend API.
           </p>
 
           <form onSubmit={onSubmit} className="mt-8 space-y-5">
-            <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Demo role">
-              {(Object.keys(ROLE_LABEL) as Role[]).map((r) => {
-                const active = role === r;
-                return (
-                  <button
-                    type="button"
-                    key={r}
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() => setRole(r)}
-                    className={
-                      "rounded-md border px-3 py-2 text-left text-xs font-medium transition-all " +
-                      (active
-                        ? "border-indigo bg-indigo-soft/60 text-foreground shadow-[var(--shadow-glow)]"
-                        : "border-border bg-surface text-muted-foreground hover:border-foreground/30 hover:text-foreground")
-                    }
-                  >
-                    <span className="block font-display text-sm font-semibold text-foreground">
-                      {ROLE_LABEL[r]}
-                    </span>
-                    <span className="mt-0.5 block text-[10px] uppercase tracking-wider text-muted-foreground">
-                      {r === "solicitor" && "Owns matters"}
-                      {r === "receiving" && "Receives handoffs"}
-                      {r === "admin" && "Oversees firm"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
             <div className="space-y-2">
               <Label htmlFor="email">Work email</Label>
               <Input
@@ -121,7 +86,7 @@ function LoginPage() {
                 <button
                   type="button"
                   className="text-xs text-muted-foreground hover:text-foreground"
-                  onClick={() => toast.info("Demo build — password reset is mocked.")}
+                  onClick={() => toast.info("Password reset is not wired yet.")}
                 >
                   Forgot?
                 </button>
@@ -136,16 +101,22 @@ function LoginPage() {
               />
             </div>
 
+            {error && (
+              <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+
             <Button type="submit" size="lg" className="w-full shadow-[var(--shadow-glow)]" disabled={submitting}>
               {submitting ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Signing in</>
               ) : (
-                <>Continue as {ROLE_LABEL[role]} <ArrowRight className="ml-1 h-4 w-4" /></>
+                <>Continue <ArrowRight className="ml-1 h-4 w-4" /></>
               )}
             </Button>
 
             <p className="text-center text-[11px] text-muted-foreground">
-              Mock auth · no network call · session lives in this browser.
+              Real auth · JWT session stored in this browser.
             </p>
           </form>
         </div>

@@ -18,16 +18,9 @@ function InboxPage() {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
 
-  // Demo: any matter that's been routed (has receivingId) OR is in an active/review stage
-  // counts as "in the receiving inbox". Filters apply firm-wide so demo users see content.
   const list = useQuery({
-    queryKey: ["inbox", search],
-    queryFn: async () => {
-      const all = await api.listHandoffs({ search: search || undefined });
-      return all.filter(
-        (h) => !!h.receivingId || h.status === "handoff-active" || h.status === "in-review",
-      );
-    },
+    queryKey: ["inbox", user?.id, search],
+    queryFn: () => api.listHandoffs({ scope: "inbox", forUserId: user!.id, search: search || undefined }),
     enabled: !!user,
     staleTime: 15_000,
   });

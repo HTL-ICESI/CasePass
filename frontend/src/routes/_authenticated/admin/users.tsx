@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, UserPlus, Mail } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { MOCK_USERS, type FirmUser } from "@/lib/api/mock-users";
+import { api, type FirmUser } from "@/lib/api";
 import { ROLE_LABEL, type Role } from "@/lib/auth";
 
 export const Route = createFileRoute("/_authenticated/admin/users")({
@@ -20,17 +21,26 @@ const ROLE_FILTERS: Array<{ value: Role | "all"; label: string }> = [
 ];
 
 function AdminUsersPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [role, setRole] = useState<Role | "all">("all");
+  const usersQuery = useQuery({
+    queryKey: ["admin-users"],
+    queryFn: () => api.listUsers(),
+  });
+  const toggleMutation = useMutation({
+    mutationFn: ({ userId, active }: { userId: string; active: boolean }) => api.setUserActive(userId, active),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+  });
 
   const users = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return MOCK_USERS.filter((u) => {
+    return (usersQuery.data ?? []).filter((u) => {
       if (role !== "all" && u.role !== role) return false;
       if (!q) return true;
       return [u.name, u.email, u.title].join(" ").toLowerCase().includes(q);
     });
-  }, [search, role]);
+  }, [search, role, usersQuery.data]);
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-10">
@@ -42,7 +52,7 @@ function AdminUsersPage() {
             Provision solicitors, receiving counsel and other admins. Role changes apply firm-wide.
           </p>
         </div>
-        <Button className="gap-2"><UserPlus className="h-4 w-4" /> Invite user</Button>
+        <Button className="gap-2" disabled><UserPlus className="h-4 w-4" /> Invite user</Button>
       </header>
 
       <section className="mt-8 rounded-2xl border border-border bg-surface shadow-[var(--shadow-1)]">
@@ -88,7 +98,7 @@ function AdminUsersPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => <UserRow key={u.id} u={u} />)}
+              {users.map((u) => <UserRow key={u.id} u={u} onToggle={(active) => toggleMutation.mutate({ userId: u.id, active })} />)}
               {users.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-5 py-16 text-center text-sm text-muted-foreground">
@@ -104,7 +114,7 @@ function AdminUsersPage() {
   );
 }
 
-function UserRow({ u }: { u: FirmUser }) {
+function UserRow({ u, onToggle }: { u: FirmUser; onToggle: (active: boolean) => void }) {
   const initials = u.name.split(" ").map((n) => n[0]).slice(0, 2).join("");
   return (
     <tr className="border-b border-border/50 last:border-b-0 transition-colors hover:bg-muted/40">
@@ -132,7 +142,12 @@ function UserRow({ u }: { u: FirmUser }) {
       <td className="px-3 py-4 font-mono text-xs">{u.activeMatters}</td>
       <td className="px-3 py-4"><StatusPill status={u.status} /></td>
       <td className="px-5 py-4 text-right font-mono text-[11px] text-muted-foreground">
-        {new Date(u.joinedAt).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
+        <div className="flex items-center justify-end gap-3">
+          <span>{new Date(u.joinedAt).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}</span>
+          <Button variant="outline" size="sm" onClick={() => onToggle(u.status !== "active")}>
+            {u.status === "active" ? "Disable" : "Enable"}
+          </Button>
+        </div>
       </td>
     </tr>
   );

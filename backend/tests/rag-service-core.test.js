@@ -140,4 +140,39 @@ describe('ragService core', () => {
     delete process.env.AI_BASE_URL;
     delete process.env.EMBEDDING_MODEL;
   });
+
+  test('indexDocument splits oversized extracted text into multiple embedding calls for e5 provider', async () => {
+    process.env.AI_API_KEY = 'provider-key';
+    process.env.AI_BASE_URL = 'https://api.totalgpt.ai';
+    process.env.EMBEDDING_MODEL = 'intfloat-multilingual-e5-base';
+
+    const add = jest.fn().mockResolvedValue(undefined);
+    const getOrCreateCollection = jest.fn().mockResolvedValue({ add });
+    const embeddingsCreate = jest.fn().mockResolvedValue({ data: [{ embedding: [0.1, 0.2] }] });
+
+    jest.doMock('openai', () => ({
+      OpenAI: jest.fn().mockImplementation(() => ({ embeddings: { create: embeddingsCreate } })),
+    }));
+    jest.doMock('chromadb', () => ({
+      ChromaClient: jest.fn().mockImplementation(() => ({ getOrCreateCollection })),
+    }));
+    jest.doMock('pdf-parse', () => jest.fn().mockImplementation(async (_buffer, options) => {
+      const longSentence = Array.from({ length: 700 }, (_, index) => `word${index}`).join(' ');
+      await options.pagerender({
+        getTextContent: async () => ({ items: [{ str: `${longSentence}.` }] }),
+      });
+      return { text: `${longSentence}.` };
+    }));
+    jest.doMock('../src/db', () => ({ query: jest.fn().mockResolvedValue({ rows: [] }) }));
+
+    const { indexDocument } = require('../src/services/ragService');
+    const result = await indexDocument('handoff-e5', 'doc-e5', 'oversized.pdf', Buffer.from('%PDF long'));
+
+    expect(result.status).toBe('indexed');
+    expect(embeddingsCreate.mock.calls.length).toBeGreaterThan(1);
+
+    delete process.env.AI_API_KEY;
+    delete process.env.AI_BASE_URL;
+    delete process.env.EMBEDDING_MODEL;
+  });
 });

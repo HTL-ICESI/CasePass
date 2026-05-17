@@ -2,6 +2,7 @@ const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const { query } = require('../db');
 const { indexDocument } = require('../services/ragService');
 const handoffService = require('../services/handoffService');
 const aiHandoffService = require('../services/aiHandoffService');
@@ -58,7 +59,7 @@ function buildStoredFilePayload(file, nonPdfStatus = 'indexed') {
   return {
     filename: file.filename,
     original_name: file.originalname,
-    status: file.mimetype === 'application/pdf' ? 'pending' : nonPdfStatus,
+    status: file.mimetype === 'application/pdf' ? 'indexing' : nonPdfStatus,
     chunks_count: 0,
   };
 }
@@ -78,6 +79,26 @@ router.post('/handoffs', async (req, res) => {
     return res.status(201).json(handoff);
   } catch (error) {
     return sendError(res, error);
+  }
+});
+
+router.get('/handoffs/recipients', async (req, res) => {
+  try {
+    const result = await query(
+      `
+        SELECT id, name, email, role, legal_role, active, created_at
+        FROM users
+        WHERE active = TRUE
+          AND role <> 'admin'
+          AND id <> $1
+        ORDER BY name ASC
+      `,
+      [req.user.id],
+    );
+
+    return res.json(result.rows);
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Unable to fetch handoff recipients.' });
   }
 });
 
@@ -151,11 +172,21 @@ router.post('/handoffs/:id/documents', upload.single('file'), async (req, res) =
       buildStoredFilePayload(req.file, 'pending'),
       buildDocumentMetadata(req.body, 'pleading'),
     );
-    const indexing = await maybeIndexUploadedPdf(req.params.id, created, req.file);
+    setImmediate(async () => {
+      try {
+        await maybeIndexUploadedPdf(req.params.id, created, req.file);
+      } catch (indexingError) {
+        console.error('[handoffs] background indexing failed', {
+          handoffId: req.params.id,
+          documentId: created.id,
+          reason: indexingError.message,
+        });
+      }
+    });
 
     return res.status(201).json({
       document: created,
-      indexing,
+      indexing: { queued: true },
     });
   } catch (error) {
     return sendError(res, error);

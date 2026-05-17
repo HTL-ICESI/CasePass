@@ -320,17 +320,17 @@ CREATE TABLE IF NOT EXISTS shared_links (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_cases_created_by ON cases(created_by);
-CREATE INDEX idx_cases_forum ON cases(forum);
-CREATE INDEX idx_cases_track ON cases(track);
-CREATE INDEX idx_cases_claim_number ON cases(claim_number);
-CREATE INDEX idx_handoffs_case_id ON handoffs(case_id);
-CREATE INDEX idx_handoffs_status ON handoffs(status);
-CREATE INDEX idx_handoffs_sending ON handoffs(sending_solicitor_id);
-CREATE INDEX idx_handoffs_receiving ON handoffs(receiving_solicitor_id);
-CREATE INDEX idx_documents_case_id ON documents(case_id);
-CREATE INDEX idx_documents_handoff_id ON documents(handoff_id);
-CREATE INDEX idx_documents_status ON documents(status);
-CREATE INDEX idx_audit_entity ON audit_events(entity_type, entity_id);
-CREATE INDEX idx_audit_created ON audit_events(created_at);
-CREATE INDEX idx_matter_status_case ON matter_status_snapshots(case_id);
+CREATE INDEX IF NOT EXISTS idx_cases_created_by ON cases(created_by);
+CREATE INDEX IF NOT EXISTS idx_cases_forum ON cases(forum);
+CREATE INDEX IF NOT EXISTS idx_cases_track ON cases(track);
+CREATE INDEX IF NOT EXISTS idx_cases_claim_number ON cases(claim_number);
+CREATE INDEX IF NOT EXISTS idx_handoffs_case_id ON handoffs(case_id);
+CREATE INDEX IF NOT EXISTS idx_handoffs_status ON handoffs(status);
+CREATE INDEX IF NOT EXISTS idx_handoffs_sending ON handoffs(sending_solicitor_id);
+CREATE INDEX IF NOT EXISTS idx_handoffs_receiving ON handoffs(receiving_solicitor_id);
+CREATE INDEX IF NOT EXISTS idx_documents_case_id ON documents(case_id);
+CREATE INDEX IF NOT EXISTS idx_documents_handoff_id ON documents(handoff_id);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_events(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_matter_status_case ON matter_status_snapshots(case_id);

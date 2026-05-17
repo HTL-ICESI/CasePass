@@ -14,9 +14,7 @@ function AuthenticatedLayout() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // Hydration-safe guard: localStorage is the source of truth for the mock.
-    const hasSession = !!window.localStorage.getItem("casepass.user");
-    if (!hasSession) navigate({ to: "/login", replace: true });
+    if (!isAuthenticated) navigate({ to: "/login", replace: true });
   }, [isAuthenticated, navigate]);
 
   if (!user) {

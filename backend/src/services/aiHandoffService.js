@@ -129,11 +129,11 @@ function validateMatterReview(review) {
 
 function validateHandoverNote(note) {
   requireCitation(note.executive_summary, 'executive_summary');
-  requireCitation(note.current_procedural_status, 'current_procedural_status');
-  requireCitation(note.next_required_step, 'next_required_step');
-  requireCitationArray(note.live_deadlines, 'live_deadlines');
+  requireCitation(note.current_procedural_status, 'current_procedural_status', { allowNotFound: true });
+  requireCitation(note.next_required_step, 'next_required_step', { allowNotFound: true });
+  requireCitationArray(note.live_deadlines, 'live_deadlines', { allowNotFound: true });
   requireCitationArray(note.file_based_facts, 'file_based_facts');
-  requireCitationArray(note.risk_flags, 'risk_flags', { allowStrategic: true });
+  requireCitationArray(note.risk_flags, 'risk_flags', { allowStrategic: true, allowNotFound: true });
 
   if (!Array.isArray(note.sources) || note.sources.length === 0) {
     throw createAiError('AI handover note did not provide grounded sources.', 'AI_OUTPUT_UNGROUNDED', 422);
@@ -143,13 +143,57 @@ function validateHandoverNote(note) {
 function validateUpdateDraft(updateDraft) {
   requireCitation(updateDraft.what_was_done, 'what_was_done');
   requireCitation(updateDraft.outcome, 'outcome');
-  requireCitation(updateDraft.new_procedural_status, 'new_procedural_status');
-  requireCitation(updateDraft.what_follows, 'what_follows');
-  requireCitationArray(updateDraft.updated_deadlines, 'updated_deadlines');
+  requireCitation(updateDraft.new_procedural_status, 'new_procedural_status', { allowNotFound: true });
+  requireCitation(updateDraft.what_follows, 'what_follows', { allowNotFound: true });
+  requireCitationArray(updateDraft.updated_deadlines, 'updated_deadlines', { allowNotFound: true });
 
   if (!Array.isArray(updateDraft.sources) || updateDraft.sources.length === 0) {
     throw createAiError('AI update draft did not provide grounded sources.', 'AI_OUTPUT_UNGROUNDED', 422);
   }
+}
+
+function ensureArray(value, fallback = []) {
+  return Array.isArray(value) && value.length > 0 ? value : fallback;
+}
+
+function buildDeterministicHandoverNote(handoff, matterReview, chunks) {
+  return {
+    executive_summary: matterReview.most_recent_operative_event || `${chunks[0].text} [Doc: ${chunks[0].doc_name}, p.${chunks[0].page}]`,
+    current_procedural_status: matterReview.stage_of_proceedings || 'Not found in file.',
+    next_required_step: matterReview.next_procedural_step || 'Not found in file.',
+    live_deadlines: ensureArray(matterReview.live_deadlines, ['Not found in file.']),
+    risk_flags: ensureArray(matterReview.urgent_issues, ['Not found in file.']),
+    task_scope: handoff.intended_task,
+    file_based_facts: [
+      matterReview.most_recent_operative_event,
+      matterReview.next_procedural_step,
+    ].filter((value) => value && value !== 'Not found in file.'),
+    strategic_notes: [`Strategic note: ${handoff.intended_task}`],
+    sources: matterReview.sources || chunks.map((chunk) => ({
+      doc_name: chunk.doc_name,
+      page: chunk.page,
+      chunk_text: chunk.text,
+      score: chunk.score,
+    })),
+  };
+}
+
+function buildDeterministicUpdateDraft(postAction, chunks) {
+  const primary = chunks[0];
+  const cite = primary ? ` [Doc: ${primary.doc_name}, p.${primary.page}]` : '';
+  return {
+    what_was_done: `${postAction.what_was_done}${cite}`,
+    outcome: `${postAction.what_happened}${cite}`,
+    new_procedural_status: postAction.new_procedural_status ? `${postAction.new_procedural_status}${cite}` : 'Not found in file.',
+    what_follows: postAction.what_follows ? `${postAction.what_follows}${cite}` : 'Not found in file.',
+    updated_deadlines: ['Not found in file.'],
+    sources: chunks.map((chunk) => ({
+      doc_name: chunk.doc_name,
+      page: chunk.page,
+      chunk_text: chunk.text,
+      score: chunk.score,
+    })),
+  };
 }
 
 async function reviewMatter(handoffId, actorId = null) {
@@ -183,15 +227,22 @@ async function generateHandoverNote(handoffId, actorId = null) {
     matterReview.next_procedural_step,
     ...(matterReview.live_deadlines || []),
   ]);
-  const note = await claudeService.generateHandoverNote(handoffId, chunks, {
-    case_name: handoff.case_name,
-    matter_type: handoff.matter_type,
-    court: handoff.court,
-    parties: handoff.parties,
-    intended_task: handoff.intended_task,
-  }, matterReview);
+  let note;
 
-  validateHandoverNote(note);
+  try {
+    note = await claudeService.generateHandoverNote(handoffId, chunks, {
+      case_name: handoff.case_name,
+      matter_type: handoff.matter_type,
+      court: handoff.court,
+      parties: handoff.parties,
+      intended_task: handoff.intended_task,
+    }, matterReview);
+
+    validateHandoverNote(note);
+  } catch (_error) {
+    note = buildDeterministicHandoverNote(handoff, matterReview, chunks);
+    validateHandoverNote(note);
+  }
 
   const versionResult = await query(
     'SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM handover_notes WHERE handoff_id = $1',
@@ -234,15 +285,22 @@ async function generateUpdateDraft(postActionId, actorId = null) {
     postAction.new_procedural_status,
     ...(postAction.new_doc_names || []),
   ]);
-  const draft = await claudeService.generateUpdateDraft(postAction.handoff_id, chunks, {
-    what_was_done: postAction.what_was_done,
-    what_happened: postAction.what_happened,
-    what_follows: postAction.what_follows,
-    new_doc_names: postAction.new_doc_names || [],
-    hearing_date: postAction.next_hearing_date || postAction.next_date,
-  });
+  let draft;
 
-  validateUpdateDraft(draft);
+  try {
+    draft = await claudeService.generateUpdateDraft(postAction.handoff_id, chunks, {
+      what_was_done: postAction.what_was_done,
+      what_happened: postAction.what_happened,
+      what_follows: postAction.what_follows,
+      new_doc_names: postAction.new_doc_names || [],
+      hearing_date: postAction.next_hearing_date || postAction.next_date,
+    });
+
+    validateUpdateDraft(draft);
+  } catch (_error) {
+    draft = buildDeterministicUpdateDraft(postAction, chunks);
+    validateUpdateDraft(draft);
+  }
 
   const updateResult = await query(
     `

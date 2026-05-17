@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ArrowRight,
@@ -54,6 +54,7 @@ type MatterForm = {
   court: Court | "";
   plaintiff: string;
   defendant: string;
+  receiverId: string;
   nextHearingAt: string;
   summary: string;
 };
@@ -65,6 +66,7 @@ type UploadItem = {
   pages: number;
   progress: number; // 0–100
   status: "indexing" | "indexed" | "error";
+  file: File;
 };
 
 const STEPS = [
@@ -77,6 +79,11 @@ function NewHandoffPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const recipients = useQuery({
+    queryKey: ["handoff-recipients"],
+    queryFn: () => api.listAssignableUsers(),
+    enabled: !!user,
+  });
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<MatterForm>({
     caseName: "",
@@ -84,6 +91,7 @@ function NewHandoffPage() {
     court: "",
     plaintiff: "",
     defendant: "",
+    receiverId: "",
     nextHearingAt: "",
     summary: "",
   });
@@ -91,11 +99,12 @@ function NewHandoffPage() {
 
   const matterValid =
     form.caseName.trim().length > 2 &&
-    form.matterType &&
-    form.court &&
-    form.plaintiff.trim() &&
-    form.defendant.trim() &&
-    form.summary.trim().length > 10;
+      form.matterType &&
+      form.court &&
+      form.plaintiff.trim() &&
+      form.defendant.trim() &&
+      form.receiverId &&
+      form.summary.trim().length > 10;
 
   const allIndexed =
     uploads.length > 0 && uploads.every((u) => u.status === "indexed");
@@ -105,25 +114,29 @@ function NewHandoffPage() {
     onSuccess: (h) => {
       queryClient.invalidateQueries({ queryKey: ["handoffs"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-kpis"] });
-      toast.success(`Handoff created — ${h.caseName}`);
-      navigate({ to: "/dashboard" });
+      const staged = uploads.length > 0 && form.receiverId !== user?.id;
+      toast.success(staged
+        ? `Handoff created — ${h.caseName}. Files are staged locally until the receiver approves clearance.`
+        : `Handoff created — ${h.caseName}`);
+      navigate({ to: "/handoffs/$id", params: { id: h.id } });
     },
     onError: () => toast.error("Could not create handoff. Try again."),
   });
 
   const submit = () => {
     if (!user || !matterValid || !allIndexed) return;
-    createMut.mutate({
-      caseName: form.caseName.trim(),
-      matterType: form.matterType as MatterType,
-      court: form.court as Court,
-      plaintiff: form.plaintiff.trim(),
-      defendant: form.defendant.trim(),
-      nextHearingAt: form.nextHearingAt || undefined,
-      summary: form.summary.trim(),
-      ownerId: user.id,
-      files: uploads.map((u) => ({ name: u.name, size: u.size, pages: u.pages })),
-    });
+      createMut.mutate({
+        caseName: form.caseName.trim(),
+        matterType: form.matterType as MatterType,
+        court: form.court as Court,
+        plaintiff: form.plaintiff.trim(),
+        defendant: form.defendant.trim(),
+        receiverId: form.receiverId,
+        nextHearingAt: form.nextHearingAt || undefined,
+        summary: form.summary.trim(),
+        ownerId: user.id,
+        files: uploads.map((u) => ({ name: u.name, size: u.size, pages: u.pages, file: u.file })),
+      });
   };
 
   return (
@@ -153,7 +166,7 @@ function NewHandoffPage() {
 
       <div className="mt-8 cp-fade-up rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-2)] md:p-8">
         {step === 1 && (
-          <MatterStep form={form} setForm={setForm} />
+          <MatterStep form={form} setForm={setForm} recipients={recipients.data ?? []} currentUserId={user?.id ?? ""} />
         )}
         {step === 2 && (
           <UploadStep uploads={uploads} setUploads={setUploads} />
@@ -250,9 +263,13 @@ function Stepper({ step }: { step: number }) {
 function MatterStep({
   form,
   setForm,
+  recipients,
+  currentUserId,
 }: {
   form: MatterForm;
   setForm: React.Dispatch<React.SetStateAction<MatterForm>>;
+  recipients: Awaited<ReturnType<typeof api.listAssignableUsers>>;
+  currentUserId: string;
 }) {
   const set = <K extends keyof MatterForm>(k: K, v: MatterForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -324,6 +341,31 @@ function MatterStep({
       </div>
 
       <div className="grid gap-2">
+        <Label>Receiving counsel / recipient</Label>
+        <Select
+          value={form.receiverId}
+          onValueChange={(value) => set("receiverId", value)}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select who will receive the handoff…" />
+          </SelectTrigger>
+          <SelectContent>
+            {currentUserId && (
+              <SelectItem value={currentUserId}>Assign to me (self-test / solo flow)</SelectItem>
+            )}
+            {recipients.map((recipient) => (
+              <SelectItem key={recipient.id} value={recipient.id}>
+                {recipient.name} — {recipient.title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          For the fastest local end-to-end demo, choose “Assign to me” so the same user can clear and progress the workflow.
+        </p>
+      </div>
+
+      <div className="grid gap-2">
         <Label htmlFor="nextHearing">Next hearing (optional)</Label>
         <Input
           id="nextHearing"
@@ -378,6 +420,7 @@ function UploadStep({
         pages: Math.max(3, Math.min(420, Math.round(f.size / 50_000))),
         progress: 0,
         status: "indexing",
+        file: f,
       }));
       setUploads((prev) => [...prev, ...items]);
     },
