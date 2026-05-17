@@ -21,7 +21,9 @@ export function CasePassLogo({
   showTagline = false,
   size = 40,
 }: Props) {
-  const ink = variant === "dark" ? "var(--onyx)" : "#FFFFFF";
+  // When variant is omitted, follow the current theme via CSS tokens so the
+  // wordmark stays readable in both light and dark mode.
+  const ink = variant === "light" ? "#FFFFFF" : "var(--foreground)";
 
   return (
     <div className={cn("inline-flex items-center gap-3", className)}>
@@ -29,7 +31,7 @@ export function CasePassLogo({
         src={casePassIsotype}
         alt=""
         aria-hidden="true"
-        className="h-auto w-auto shrink-0"
+        className="h-auto w-auto shrink-0 dark:invert dark:hue-rotate-180"
         style={{ height: size, width: size * 1.67 }}
       />
 
@@ -50,7 +52,7 @@ export function CasePassLogo({
             <span
               className="font-display italic mt-1.5"
               style={{
-                color: variant === "dark" ? "var(--onyx-300)" : "rgba(255,255,255,0.75)",
+                color: variant === "light" ? "rgba(255,255,255,0.75)" : "var(--muted-foreground)",
                 fontSize: size * 0.3,
                 letterSpacing: "-0.005em",
               }}

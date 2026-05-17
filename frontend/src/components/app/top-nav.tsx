@@ -1,10 +1,11 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { LogOut, ChevronDown } from "lucide-react";
+import { LogOut, ChevronDown, Moon, Sun } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
 import { CasePassLogo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { useAuth, ROLE_LABEL, type Role } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 
 type NavItem = { to: string; label: string; exact?: boolean };
 
@@ -27,6 +28,7 @@ const NAV_BY_ROLE: Record<Role, NavItem[]> = {
 
 export function TopNav() {
   const { user, logout } = useAuth();
+  const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -74,6 +76,14 @@ export function TopNav() {
           <span className="hidden font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground md:inline">
             {user.firm}
           </span>
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
           <div className="relative" ref={menuRef}>
             <button
               type="button"

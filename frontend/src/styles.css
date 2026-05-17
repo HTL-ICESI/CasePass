@@ -136,6 +136,18 @@
 }
 
 .dark {
+  --canvas: oklch(0.16 0.025 268);
+  --surface: oklch(0.22 0.03 268);
+  /* Brighter, more saturated soft tints so chips read vibrantly on dark surfaces */
+  --indigo-soft: oklch(0.38 0.13 285);
+  --mint-soft: oklch(0.40 0.13 170);
+  /* Brighten brand accents for better contrast in dark mode */
+  --indigo: oklch(0.72 0.18 285);
+  --mint: oklch(0.84 0.16 170);
+  --success: oklch(0.82 0.16 165);
+  --warning: oklch(0.86 0.17 78);
+  --info: oklch(0.76 0.18 250);
+  --destructive: oklch(0.74 0.20 22);
   --background: var(--onyx);
   --foreground: oklch(0.97 0.005 270);
   --card: var(--onyx-700);
@@ -196,9 +208,30 @@
 }
 .cp-fade-up { animation: cp-fade-up 240ms var(--ease-out) both; }
 
+@media (prefers-reduced-motion: reduce) {
+  .cp-pulse, .cp-fade-up { animation: none !important; }
+  * { transition-duration: 0ms !important; }
+}
+
 .cp-grid-bg {
   background-image:
     linear-gradient(rgb(255 255 255 / 0.04) 1px, transparent 1px),
     linear-gradient(90deg, rgb(255 255 255 / 0.04) 1px, transparent 1px);
   background-size: 32px 32px;
+}
+
+/*
+ * Dark-mode token bridges
+ * The brand "onyx" tokens are intentionally fixed dark values (used as
+ * background on light pages). In dark mode, when used as TEXT color on
+ * dark surfaces they disappear — remap those text utilities to the
+ * theme foreground so labels, summaries and stepper text stay legible.
+ * Background utilities (bg-onyx) are not affected.
+ */
+.dark .text-onyx,
+.dark .hover\:text-onyx:hover {
+  color: oklch(0.97 0.005 270);
+}
+.dark .text-onyx-300 {
+  color: oklch(0.78 0.02 270);
 }

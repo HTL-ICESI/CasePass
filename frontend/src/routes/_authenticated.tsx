@@ -1,4 +1,4 @@
-import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useNavigate, useLocation } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import { TopNav } from "@/components/app/top-nav";
@@ -34,8 +34,17 @@ function AuthenticatedLayout() {
     <div className="flex min-h-screen flex-col bg-canvas">
       <TopNav />
       <main className="flex-1">
-        <Outlet />
+        <AnimatedOutlet />
       </main>
+    </div>
+  );
+}
+
+function AnimatedOutlet() {
+  const location = useLocation();
+  return (
+    <div key={location.pathname} className="cp-fade-up">
+      <Outlet />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth, type Role, ROLE_LABEL } from "@/lib/auth";
 import { CasePassLogo } from "@/components/brand/logo";
+import { ThemeToggle } from "@/components/app/theme-toggle";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -59,7 +60,10 @@ function LoginPage() {
     <div className="grid min-h-screen lg:grid-cols-2">
       {/* Form side */}
       <section className="flex flex-col bg-canvas px-6 py-10 lg:px-16">
-        <Link to="/" className="self-start"><CasePassLogo /></Link>
+        <div className="flex items-center justify-between">
+          <Link to="/" className="self-start"><CasePassLogo /></Link>
+          <ThemeToggle />
+        </div>
 
         <div className="my-auto max-w-md cp-fade-up">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-indigo">Sign in</p>
