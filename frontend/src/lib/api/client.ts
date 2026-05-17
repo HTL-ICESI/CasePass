@@ -1,7 +1,15 @@
 import { getStoredToken } from "@/lib/auth";
-import { clearStagedUploads, getStagedUploads, mapStagedUploadsToDocuments, removeStagedUpload, stageUploads } from "./pending-uploads";
+import {
+  clearStagedUploads,
+  getStagedUploads,
+  mapStagedUploadsToDocuments,
+  removeStagedUpload,
+  stageUploads,
+} from "./pending-uploads";
 import type {
   ChatAnswer,
+  ChatMessage,
+  ChatStreamEvent,
   Citation,
   Chunk,
   CreateHandoffInput,
@@ -31,11 +39,22 @@ export interface CasePassClient {
   getHandoff(id: string): Promise<Handoff | null>;
   getDashboardKpis(forUserId: string): Promise<DashboardKpis>;
   createHandoff(input: CreateHandoffInput): Promise<Handoff>;
+  deleteCase(caseId: string): Promise<void>;
+  deleteHandoffDocument(handoffId: string, docId: string): Promise<void>;
+  changeRecipient(handoffId: string, newRecipientId: string): Promise<Handoff>;
+  fetchDocumentBlobUrl(handoffId: string, docId: string): Promise<string>;
   getMatterReview(handoffId: string): Promise<MatterReview | null>;
   listDocuments(handoffId: string): Promise<Document[]>;
   listChunks(handoffId: string): Promise<Chunk[]>;
   getChatSuggestions(handoffId: string): Promise<string[]>;
   chatWithSources(handoffId: string, question: string): Promise<ChatAnswer>;
+  streamChatWithSources(
+    handoffId: string,
+    question: string,
+    history: ChatMessage[],
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatAnswer>;
   listUpdates(handoffId: string): Promise<MatterUpdate[]>;
   createUpdate(input: CreateUpdateInput): Promise<MatterUpdate>;
   listUsers(): Promise<FirmUser[]>;
@@ -45,12 +64,24 @@ export interface CasePassClient {
   flushStagedUploads(handoffId: string): Promise<Document[]>;
   approveClearance(handoffId: string): Promise<Handoff>;
   createHandoverNote(handoffId: string): Promise<ReviewActionResult>;
-  approveHandoverNote(handoffId: string, noteId: string, solicitorEdited: unknown): Promise<Handoff>;
+  approveHandoverNote(
+    handoffId: string,
+    noteId: string,
+    solicitorEdited: unknown,
+  ): Promise<Handoff>;
   releaseHandoffPack(handoffId: string): Promise<Handoff>;
   acceptHandoff(handoffId: string, scope?: "limited" | "continuing"): Promise<Handoff>;
   generateUpdateDraft(handoffId: string, updateId: string): Promise<MatterUpdate>;
-  verifyUpdate(handoffId: string, updateId: string, verifiedVersion: unknown, newProceduralStatus?: string): Promise<Handoff>;
-  routeHandoff(handoffId: string, outcome: "returned" | "limited_followon" | "new_instructed_solicitor" | "escalated"): Promise<Handoff>;
+  verifyUpdate(
+    handoffId: string,
+    updateId: string,
+    verifiedVersion: unknown,
+    newProceduralStatus?: string,
+  ): Promise<Handoff>;
+  routeHandoff(
+    handoffId: string,
+    outcome: "returned" | "limited_followon" | "new_instructed_solicitor" | "escalated",
+  ): Promise<Handoff>;
 }
 
 function mapPrivilege(flag: boolean): PrivilegeFlag {
@@ -64,6 +95,9 @@ function mapDocumentStatus(status: string): Document["status"] {
   if (status === "error") {
     return "error";
   }
+  if (status === "staged") {
+    return "staged";
+  }
   return "indexed";
 }
 
@@ -74,7 +108,17 @@ function mapMatterStatus(status: string): Handoff["status"] {
   if (["pack_building", "pack_review"].includes(status)) {
     return "in-review";
   }
-  if (["pack_released", "accepted", "task_in_progress", "post_action_pending", "update_draft", "update_verified", "routed"].includes(status)) {
+  if (
+    [
+      "pack_released",
+      "accepted",
+      "task_in_progress",
+      "post_action_pending",
+      "update_draft",
+      "update_verified",
+      "routed",
+    ].includes(status)
+  ) {
     return "handoff-active";
   }
   if (["completed", "escalated", "clearance_failed"].includes(status)) {
@@ -127,7 +171,9 @@ function makeCitation(doc: string, page: number) {
   return { doc, page };
 }
 
-function buildSourceLookup(sources: Array<{ doc_name: string; page: number; chunk_text?: string; score?: number }> = []) {
+function buildSourceLookup(
+  sources: Array<{ doc_name: string; page: number; chunk_text?: string; score?: number }> = [],
+) {
   const map = new Map<string, { preview?: string; score?: number }>();
 
   for (const source of sources) {
@@ -159,24 +205,37 @@ function stripCitationText(text: string | undefined) {
     .trim();
 }
 
-function mapReviewNote(text: string | undefined, sourceLookup?: Map<string, { preview?: string; score?: number }>): { text: string; citation?: Citation } {
+function mapReviewNote(
+  text: string | undefined,
+  sourceLookup?: Map<string, { preview?: string; score?: number }>,
+): { text: string; citation?: Citation } {
   const citation = extractCitation(text);
   const source = citation ? sourceLookup?.get(`${citation.doc}:${citation.page}`) : undefined;
   return {
     text: stripCitationText(text),
-    citation: citation ? { ...citation, preview: source?.preview, score: source?.score } : undefined,
+    citation: citation
+      ? { ...citation, preview: source?.preview, score: source?.score }
+      : undefined,
   };
 }
 
 function mapReviewFromAiDraft(draft: any): MatterReview {
   const sourceLookup = buildSourceLookup(draft?.sources || []);
-  const currentStatus = draft?.current_procedural_status || draft?.stage_of_proceedings || "Not yet reviewed.";
-  const nextRequired = draft?.next_required_step || draft?.next_procedural_step || "Awaiting next step.";
-  const urgentIssues = Array.isArray(draft?.risk_flags) ? draft.risk_flags : Array.isArray(draft?.urgent_issues) ? draft.urgent_issues : [];
+  const currentStatus =
+    draft?.current_procedural_status || draft?.stage_of_proceedings || "Not yet reviewed.";
+  const nextRequired =
+    draft?.next_required_step || draft?.next_procedural_step || "Awaiting next step.";
+  const urgentIssues = Array.isArray(draft?.risk_flags)
+    ? draft.risk_flags
+    : Array.isArray(draft?.urgent_issues)
+      ? draft.urgent_issues
+      : [];
   const missingDocs = Array.isArray(draft?.missing_documents) ? draft.missing_documents : [];
+  const stageNote = mapReviewNote(currentStatus, sourceLookup);
 
   return {
-    stage: stripCitationText(currentStatus),
+    stage: stageNote.text,
+    stageCitation: stageNote.citation,
     lastEvent: mapReviewNote(draft?.most_recent_operative_event || currentStatus, sourceLookup),
     urgentIssues: urgentIssues.map((item: string) => mapReviewNote(item, sourceLookup)),
     missingDocs,
@@ -195,13 +254,24 @@ function mapLatestNote(note: BackendNote | null) {
     return null;
   }
 
+  const currentProceduralStatus = mapReviewNote(noteDraft.current_procedural_status, sourceLookup);
+  const nextRequiredStep = mapReviewNote(noteDraft.next_required_step, sourceLookup);
+
   return {
     executiveSummary: stripCitationText(noteDraft.executive_summary),
-    currentProceduralStatus: stripCitationText(noteDraft.current_procedural_status),
-    nextRequiredStep: stripCitationText(noteDraft.next_required_step),
-    liveDeadlines: Array.isArray(noteDraft.live_deadlines) ? noteDraft.live_deadlines.map((item: string) => mapReviewNote(item, sourceLookup)) : [],
-    riskFlags: Array.isArray(noteDraft.risk_flags) ? noteDraft.risk_flags.map((item: string) => mapReviewNote(item, sourceLookup)) : [],
-    fileBasedFacts: Array.isArray(noteDraft.file_based_facts) ? noteDraft.file_based_facts.map((item: string) => mapReviewNote(item, sourceLookup)) : [],
+    currentProceduralStatus: currentProceduralStatus.text,
+    currentProceduralStatusCitation: currentProceduralStatus.citation,
+    nextRequiredStep: nextRequiredStep.text,
+    nextRequiredStepCitation: nextRequiredStep.citation,
+    liveDeadlines: Array.isArray(noteDraft.live_deadlines)
+      ? noteDraft.live_deadlines.map((item: string) => mapReviewNote(item, sourceLookup))
+      : [],
+    riskFlags: Array.isArray(noteDraft.risk_flags)
+      ? noteDraft.risk_flags.map((item: string) => mapReviewNote(item, sourceLookup))
+      : [],
+    fileBasedFacts: Array.isArray(noteDraft.file_based_facts)
+      ? noteDraft.file_based_facts.map((item: string) => mapReviewNote(item, sourceLookup))
+      : [],
     strategicNotes: Array.isArray(noteDraft.strategic_notes) ? noteDraft.strategic_notes : [],
   };
 }
@@ -241,9 +311,20 @@ function mapHandoffDetail(payload: any): Handoff {
   const backendDocuments = (payload.documents || payload.document_map || []).map(mapDocument);
   const stagedDocuments = mapStagedUploadsToDocuments(payload.id);
   const documents = [...backendDocuments, ...stagedDocuments];
-  const latestNote = Array.isArray(payload.handover_notes) && payload.handover_notes.length > 0
-    ? payload.handover_notes[payload.handover_notes.length - 1]
-    : null;
+  const fallbackDocumentsCount = Number(
+    payload.document_count ?? payload.documents_count ?? caseSummary.document_count ?? 0,
+  );
+  const fallbackPagesIndexed = Number(
+    payload.pages_indexed ?? payload.page_count ?? caseSummary.pages_indexed ?? 0,
+  );
+  const countedPages = documents.reduce(
+    (total: number, document: Document) => total + Number(document.pages || 0),
+    0,
+  );
+  const latestNote =
+    Array.isArray(payload.handover_notes) && payload.handover_notes.length > 0
+      ? payload.handover_notes[payload.handover_notes.length - 1]
+      : null;
 
   return {
     id: payload.id,
@@ -260,10 +341,12 @@ function mapHandoffDetail(payload: any): Handoff {
     ownerId: payload.sending_solicitor_id,
     receivingId: payload.receiving_solicitor_id || undefined,
     createdAt: payload.created_at,
-    nextHearingAt: caseSummary.next_hearing_date ? new Date(caseSummary.next_hearing_date).toISOString() : undefined,
+    nextHearingAt: caseSummary.next_hearing_date
+      ? new Date(caseSummary.next_hearing_date).toISOString()
+      : undefined,
     summary: deriveSummary(caseSummary, latestNote),
-    documentsCount: documents.length,
-    pagesIndexed: documents.reduce((total: number, document: Document) => total + Number(document.pages || 0), 0),
+    documentsCount: documents.length > 0 ? documents.length : fallbackDocumentsCount,
+    pagesIndexed: countedPages > 0 ? countedPages : fallbackPagesIndexed,
     deadlines: mapDeadlines(caseSummary),
     handoffType: payload.handoff_type || null,
     noticeOfChangeRequired: Boolean(payload.notice_of_change_required),
@@ -287,7 +370,11 @@ function mapDocument(document: BackendDocument): Document {
   };
 }
 
-function mapUpdate(update: BackendUpdate, currentUserName = "Unknown", currentRole: MatterUpdate["authorRole"] = "Solicitor"): MatterUpdate {
+function mapUpdate(
+  update: BackendUpdate,
+  currentUserName = "Unknown",
+  currentRole: MatterUpdate["authorRole"] = "Solicitor",
+): MatterUpdate {
   const verified = parseJson<any>(update.verified_version, null);
   const aiDraft = parseJson<any>(update.ai_draft, null);
   const citations = Array.isArray(aiDraft?.sources)
@@ -312,7 +399,8 @@ function mapUpdate(update: BackendUpdate, currentUserName = "Unknown", currentRo
 }
 
 function mapChatAnswer(payload: any): ChatAnswer {
-  const insufficient = payload.answer === "Insufficient evidence in the file to answer this question.";
+  const insufficient =
+    payload.answer === "Insufficient evidence in the file to answer this question.";
   const sourceLookup = buildSourceLookup(payload.sources || []);
   return {
     text: payload.answer,
@@ -368,11 +456,139 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
     : await response.text().catch(() => "");
 
   if (!response.ok) {
-    const error = typeof body === "object" && body !== null && "error" in body ? String((body as any).error) : `Request failed with status ${response.status}`;
+    const error =
+      typeof body === "object" && body !== null && "error" in body
+        ? String((body as any).error)
+        : `Request failed with status ${response.status}`;
     throw Object.assign(new Error(error), { status: response.status, body });
   }
 
   return body as T;
+}
+
+function mapHistoryForBackend(history: ChatMessage[]) {
+  return history
+    .filter((message) => ["user", "assistant"].includes(message.role) && message.text.trim())
+    .slice(-6)
+    .map((message) => ({
+      role: message.role,
+      text: message.text,
+    }));
+}
+
+function parseSseBlock(block: string): { event: string; data: unknown } | null {
+  const lines = block.split(/\r?\n/);
+  let event = "message";
+  const data: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trim();
+    }
+    if (line.startsWith("data:")) {
+      data.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  if (data.length === 0) {
+    return null;
+  }
+
+  try {
+    return { event, data: JSON.parse(data.join("\n")) };
+  } catch {
+    return { event, data: data.join("\n") };
+  }
+}
+
+async function streamApiRequest(
+  path: string,
+  body: unknown,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const token = getStoredToken();
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    const errorBody = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : await response.text().catch(() => "");
+    const error =
+      typeof errorBody === "object" && errorBody !== null && "error" in errorBody
+        ? String((errorBody as { error: unknown }).error)
+        : `Request failed with status ${response.status}`;
+    throw Object.assign(new Error(error), { status: response.status, body: errorBody });
+  }
+
+  if (!response.body) {
+    throw new Error("Streaming response was empty.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalPayload: unknown = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+    const blocks = buffer.split(/\n\n/);
+    buffer = blocks.pop() || "";
+
+    for (const block of blocks) {
+      const parsed = parseSseBlock(block.trim());
+      if (!parsed) {
+        continue;
+      }
+
+      if (parsed.event === "status") {
+        const data = parsed.data as { message?: unknown };
+        onEvent({ type: "status", message: String(data.message || "") });
+      } else if (parsed.event === "delta") {
+        const data = parsed.data as { text?: unknown };
+        onEvent({ type: "delta", text: String(data.text || "") });
+      } else if (parsed.event === "final") {
+        finalPayload = parsed.data;
+        onEvent({ type: "final", answer: mapChatAnswer(parsed.data) });
+      } else if (parsed.event === "error") {
+        const data = parsed.data as { error?: unknown };
+        const message = String(data.error || "Chat stream failed.");
+        onEvent({ type: "error", error: message });
+        throw new Error(message);
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (!finalPayload && buffer.trim()) {
+    const parsed = parseSseBlock(buffer.trim());
+    if (parsed?.event === "final") {
+      finalPayload = parsed.data;
+      onEvent({ type: "final", answer: mapChatAnswer(parsed.data) });
+    }
+  }
+
+  if (!finalPayload) {
+    throw new Error("Chat stream ended before the final answer arrived.");
+  }
+
+  return finalPayload;
 }
 
 async function listCases() {
@@ -390,18 +606,22 @@ async function getHandoffPayload(id: string) {
 export const realClient: CasePassClient = {
   async listHandoffs(params) {
     const cases = await listCases();
-    const handoffGroups = await Promise.all(cases.map(async (caseRow) => {
-      const handoffs = await listCaseHandoffs(caseRow.id);
-      return handoffs.map((handoff) => ({ caseRow, handoff }));
-    }));
+    const handoffGroups = await Promise.all(
+      cases.map(async (caseRow) => {
+        const handoffs = await listCaseHandoffs(caseRow.id);
+        return handoffs.map((handoff) => ({ caseRow, handoff }));
+      }),
+    );
 
-    let flattened = handoffGroups.flat().map(({ caseRow, handoff }) => mapHandoffDetail({
-      ...handoff,
-      case_summary: caseRow,
-      documents: [],
-      handover_notes: [],
-      post_action_updates: [],
-    }));
+    let flattened = handoffGroups.flat().map(({ caseRow, handoff }) =>
+      mapHandoffDetail({
+        ...handoff,
+        case_summary: caseRow,
+        documents: [],
+        handover_notes: [],
+        post_action_updates: [],
+      }),
+    );
 
     if (params?.scope === "mine" && params.forUserId) {
       flattened = flattened.filter((handoff) => handoff.ownerId === params.forUserId);
@@ -417,14 +637,19 @@ export const realClient: CasePassClient = {
     }
     if (params?.search) {
       const query = params.search.toLowerCase();
-      flattened = flattened.filter((handoff) => [
-        handoff.caseName,
-        handoff.parties.plaintiff,
-        handoff.parties.defendant,
-        handoff.summary,
-        handoff.court,
-        handoff.matterType,
-      ].join(" ").toLowerCase().includes(query));
+      flattened = flattened.filter((handoff) =>
+        [
+          handoff.caseName,
+          handoff.parties.plaintiff,
+          handoff.parties.defendant,
+          handoff.summary,
+          handoff.court,
+          handoff.matterType,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      );
     }
 
     return flattened.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -445,11 +670,14 @@ export const realClient: CasePassClient = {
   async getDashboardKpis(_forUserId) {
     const handoffs = await this.listHandoffs({ scope: "firm" });
     const weekFromNow = Date.now() + 7 * 24 * 60 * 60 * 1000;
-    const deadlinesThisWeek = handoffs.flatMap((handoff) => handoff.deadlines).filter((deadline) => new Date(deadline.dueAt).getTime() <= weekFromNow).length;
+    const deadlinesThisWeek = handoffs
+      .flatMap((handoff) => handoff.deadlines)
+      .filter((deadline) => new Date(deadline.dueAt).getTime() <= weekFromNow).length;
     return {
       activeMatters: handoffs.filter((handoff) => handoff.status !== "closed").length,
       deadlinesThisWeek,
-      pendingHandoffs: handoffs.filter((handoff) => ["intake", "indexed"].includes(handoff.status)).length,
+      pendingHandoffs: handoffs.filter((handoff) => ["intake", "indexed"].includes(handoff.status))
+        .length,
       pagesIndexed: handoffs.reduce((total, handoff) => total + handoff.pagesIndexed, 0),
     };
   },
@@ -481,61 +709,68 @@ export const realClient: CasePassClient = {
       }),
     });
 
-    let uploadsPersisted = false;
-    if (input.files.length > 0) {
-      const clearancePayload = {
-        conflict_check: true,
-        confidentiality_clear: true,
-        competence_confirmed: true,
-        capacity_confirmed: true,
-        rights_of_audience_confirmed: true,
-        rights_of_audience_forum: createdCase.forum,
-        result: "approved",
-        clearance_notes: "Auto-cleared for integrated local workflow.",
-      };
+    const uploadedDocuments: BackendDocument[] = [];
 
+    for (const file of input.files) {
+      if (!file.file) continue;
+      const formData = new FormData();
+      formData.append("file", file.file);
+      formData.append("doc_type", "pleading");
+      formData.append("source_status", "original");
+      formData.append("page_count", String(file.pages));
       try {
-        await apiRequest(`/handoffs/${handoff.id}/clearance-records`, {
-          method: "POST",
-          body: JSON.stringify(clearancePayload),
-        });
-        uploadsPersisted = true;
-      } catch {
-        stageUploads(handoff.id, input.files.filter((file) => file.file).map((file) => ({ file: file.file!, pages: file.pages, docType: "pleading" })));
-      }
-    }
-
-    if (uploadsPersisted) {
-      for (const file of input.files) {
-        if (!file.file) continue;
-        const formData = new FormData();
-        formData.append("file", file.file);
-        formData.append("doc_type", "pleading");
-        formData.append("source_status", "original");
-        formData.append("page_count", String(file.pages));
-        try {
-          await apiRequest(`/handoffs/${handoff.id}/documents`, { method: "POST", body: formData });
-        } catch {
-          stageUploads(handoff.id, [{ file: file.file, pages: file.pages, docType: "pleading" }]);
+        const response = await apiRequest<{ document?: BackendDocument }>(
+          `/handoffs/${handoff.id}/documents`,
+          {
+            method: "POST",
+            body: formData,
+          },
+        );
+        if (response?.document) {
+          uploadedDocuments.push(response.document);
         }
+      } catch {
+        stageUploads(handoff.id, [{ file: file.file, pages: file.pages, docType: "pleading" }]);
       }
     }
 
-    return (await this.getHandoff(handoff.id)) as Handoff;
+    try {
+      return (await this.getHandoff(handoff.id)) as Handoff;
+    } catch {
+      return mapHandoffDetail({
+        ...handoff,
+        case_summary: createdCase,
+        documents: uploadedDocuments,
+        document_count: uploadedDocuments.length,
+        pages_indexed: uploadedDocuments.reduce(
+          (total, document) => total + Number(document.page_count || 0),
+          0,
+        ),
+      });
+    }
+  },
+
+  async deleteCase(caseId) {
+    await apiRequest(`/cases/${caseId}`, { method: "DELETE" });
   },
 
   async getMatterReview(handoffId) {
     const payload = await getHandoffPayload(handoffId);
-    const latestNote = Array.isArray(payload.handover_notes) && payload.handover_notes.length > 0
-      ? payload.handover_notes[payload.handover_notes.length - 1]
-      : null;
+    const latestNote =
+      Array.isArray(payload.handover_notes) && payload.handover_notes.length > 0
+        ? payload.handover_notes[payload.handover_notes.length - 1]
+        : null;
 
     if (latestNote?.ai_draft || latestNote?.solicitor_edited) {
-      return mapReviewFromAiDraft(parseJson<any>(latestNote.solicitor_edited || latestNote.ai_draft, {}));
+      return mapReviewFromAiDraft(
+        parseJson<any>(latestNote.solicitor_edited || latestNote.ai_draft, {}),
+      );
     }
 
     try {
-      const generated = await apiRequest<any>(`/handoffs/${handoffId}/matter-reviews`, { method: "POST" });
+      const generated = await apiRequest<any>(`/handoffs/${handoffId}/matter-reviews`, {
+        method: "POST",
+      });
       return mapReviewFromAiDraft(generated);
     } catch (_error) {
       return null;
@@ -570,8 +805,23 @@ export const realClient: CasePassClient = {
     const payload = await getHandoffPayload(handoffId);
     const answer = await apiRequest<any>(`/cases/${payload.case_summary.id}/chat`, {
       method: "POST",
-      body: JSON.stringify({ question, handoff_id: handoffId }),
+      body: JSON.stringify({ question, handoff_id: handoffId, conversation_history: [] }),
     });
+    return mapChatAnswer(answer);
+  },
+
+  async streamChatWithSources(handoffId, question, history, onEvent, signal) {
+    const payload = await getHandoffPayload(handoffId);
+    const answer = await streamApiRequest(
+      `/cases/${payload.case_summary.id}/chat/stream`,
+      {
+        question,
+        handoff_id: handoffId,
+        conversation_history: mapHistoryForBackend(history),
+      },
+      onEvent,
+      signal,
+    );
     return mapChatAnswer(answer);
   },
 
@@ -598,24 +848,32 @@ export const realClient: CasePassClient = {
       }
     }
     const updates = await this.listUpdates(input.matterId);
-    return updates.find((update) => update.id === response.post_action_update.id) || mapUpdate(response.post_action_update, input.authorName, input.authorRole);
+    return (
+      updates.find((update) => update.id === response.post_action_update.id) ||
+      mapUpdate(response.post_action_update, input.authorName, input.authorRole)
+    );
   },
 
   async listUsers() {
     const users = await apiRequest<any[]>("/users");
     const handoffs = await this.listHandoffs({ scope: "firm" });
 
-    return users.map((user) => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: mapRole(user.role, user.legal_role),
-      title: mapLegalRoleTitle(user.legal_role),
-      legalRole: user.legal_role || null,
-      activeMatters: handoffs.filter((handoff) => handoff.ownerId === user.id || handoff.receivingId === user.id).length,
-      status: user.active ? "active" : "disabled",
-      joinedAt: user.created_at,
-    } satisfies FirmUser));
+    return users.map(
+      (user) =>
+        ({
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: mapRole(user.role, user.legal_role),
+          title: mapLegalRoleTitle(user.legal_role),
+          legalRole: user.legal_role || null,
+          activeMatters: handoffs.filter(
+            (handoff) => handoff.ownerId === user.id || handoff.receivingId === user.id,
+          ).length,
+          status: user.active ? "active" : "disabled",
+          joinedAt: user.created_at,
+        }) satisfies FirmUser,
+    );
   },
 
   async setUserActive(userId, active) {
@@ -638,17 +896,20 @@ export const realClient: CasePassClient = {
 
   async listAssignableUsers() {
     const users = await apiRequest<any[]>("/handoffs/recipients");
-    return users.map((user) => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: mapRole(user.role, user.legal_role),
-      title: mapLegalRoleTitle(user.legal_role),
-      legalRole: user.legal_role || null,
-      activeMatters: 0,
-      status: user.active ? "active" : "disabled",
-      joinedAt: user.created_at,
-    } satisfies FirmUser));
+    return users.map(
+      (user) =>
+        ({
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: mapRole(user.role, user.legal_role),
+          title: mapLegalRoleTitle(user.legal_role),
+          legalRole: user.legal_role || null,
+          activeMatters: 0,
+          status: user.active ? "active" : "disabled",
+          joinedAt: user.created_at,
+        }) satisfies FirmUser,
+    );
   },
 
   async uploadHandoffDocument(handoffId, file, docType = "pleading") {
@@ -656,8 +917,13 @@ export const realClient: CasePassClient = {
     formData.append("file", file);
     formData.append("doc_type", docType);
     formData.append("source_status", "original");
-    const response = await apiRequest<any>(`/handoffs/${handoffId}/documents`, { method: "POST", body: formData });
-    const staged = getStagedUploads(handoffId).find((item) => item.file.name === file.name && item.file.size === file.size);
+    const response = await apiRequest<any>(`/handoffs/${handoffId}/documents`, {
+      method: "POST",
+      body: formData,
+    });
+    const staged = getStagedUploads(handoffId).find(
+      (item) => item.file.name === file.name && item.file.size === file.size,
+    );
     if (staged) {
       removeStagedUpload(handoffId, staged.id);
     }
@@ -699,7 +965,13 @@ export const realClient: CasePassClient = {
         clearance_notes: "Approved from frontend workflow.",
       }),
     });
-    return mapHandoffDetail({ ...result, case_summary: current.case_summary, documents: current.documents || [], handover_notes: current.handover_notes || [], post_action_updates: current.post_action_updates || [] });
+    return mapHandoffDetail({
+      ...result,
+      case_summary: current.case_summary,
+      documents: current.documents || [],
+      handover_notes: current.handover_notes || [],
+      post_action_updates: current.post_action_updates || [],
+    });
   },
 
   async createHandoverNote(handoffId) {
@@ -731,7 +1003,9 @@ export const realClient: CasePassClient = {
   },
 
   async generateUpdateDraft(handoffId, updateId) {
-    await apiRequest(`/handoffs/${handoffId}/post-action-updates/${updateId}/drafts`, { method: "POST" });
+    await apiRequest(`/handoffs/${handoffId}/post-action-updates/${updateId}/drafts`, {
+      method: "POST",
+    });
     const updates = await this.listUpdates(handoffId);
     return updates.find((update) => update.id === updateId) || updates[0];
   },
@@ -739,7 +1013,10 @@ export const realClient: CasePassClient = {
   async verifyUpdate(handoffId, updateId, verifiedVersion, newProceduralStatus) {
     await apiRequest(`/handoffs/${handoffId}/post-action-updates/${updateId}`, {
       method: "PATCH",
-      body: JSON.stringify({ verified_version: verifiedVersion, new_procedural_status: newProceduralStatus || "Update verified" }),
+      body: JSON.stringify({
+        verified_version: verifiedVersion,
+        new_procedural_status: newProceduralStatus || "Update verified",
+      }),
     });
     return (await this.getHandoff(handoffId)) as Handoff;
   },
@@ -750,6 +1027,37 @@ export const realClient: CasePassClient = {
       body: JSON.stringify({ outcome }),
     });
     return (await this.getHandoff(handoffId)) as Handoff;
+  },
+
+  async deleteHandoffDocument(handoffId, docId) {
+    await apiRequest(`/handoffs/${handoffId}/documents/${docId}`, { method: "DELETE" });
+  },
+
+  async changeRecipient(handoffId, newRecipientId) {
+    await apiRequest(`/handoffs/${handoffId}/recipient`, {
+      method: "PATCH",
+      body: JSON.stringify({ receiving_solicitor_id: newRecipientId }),
+    });
+    return (await this.getHandoff(handoffId)) as Handoff;
+  },
+
+  async fetchDocumentBlobUrl(handoffId, docId) {
+    const token = getStoredToken();
+    const response = await fetch(`${API_BASE}/handoffs/${handoffId}/documents/${docId}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const error =
+        typeof body === "object" && body !== null && "error" in body
+          ? String((body as any).error)
+          : `Request failed with status ${response.status}`;
+      throw Object.assign(new Error(error), { status: response.status });
+    }
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
   },
 };
 

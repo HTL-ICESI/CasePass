@@ -129,11 +129,11 @@ describe('cases routes', () => {
     expect(invalid.status).toBe(422);
   });
 
-  test('DELETE /api/cases/:id blocks active handoffs and allows owner deletion', async () => {
+  test('DELETE /api/cases/:id deletes accessible cases and cascades active handoffs', async () => {
     const caseWithHandoff = await createCase(global.testContext.user1.id);
     await createHandoff(caseWithHandoff.id, global.testContext.user1.id, global.testContext.user2.id, { status: 'pack_released', clearance_result: 'approved' });
 
-    const blocked = await request(app)
+    const activeDeleted = await request(app)
       .delete(`/api/cases/${caseWithHandoff.id}`)
       .set('Authorization', `Bearer ${global.testContext.user1Token}`);
 
@@ -147,7 +147,7 @@ describe('cases routes', () => {
       .delete(`/api/cases/${caseForbidden.id}`)
       .set('Authorization', `Bearer ${global.testContext.user2Token}`);
 
-    expect(blocked.status).toBe(409);
+    expect(activeDeleted.status).toBe(200);
     expect(deleted.status).toBe(200);
     expect(forbidden.status).toBe(403);
 

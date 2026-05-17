@@ -25,7 +25,7 @@ if (!fs.existsSync(uploadDir)) {
 
 app.use(cors({ origin: process.env.APP_URL || 'http://localhost:5173' }));
 app.use(express.json());
-app.use('/uploads', express.static(uploadDir));
+// Uploaded files are served through authenticated handoff document endpoints.
 
 app.use('/api/auth', authRoutes);
 app.use('/api', publicSharedRouter);

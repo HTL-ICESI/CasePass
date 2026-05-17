@@ -1,16 +1,11 @@
-export type MatterStatus =
-  | "intake"
-  | "indexed"
-  | "handoff-active"
-  | "in-review"
-  | "closed";
+export type MatterStatus = "intake" | "indexed" | "handoff-active" | "in-review" | "closed";
 
 export type MatterType = string;
 export type Court = string;
 
 export type PrivilegeFlag = "none" | "client-privilege" | "work-product";
 
-export type DocumentStatus = "indexed" | "processing" | "error";
+export type DocumentStatus = "indexed" | "processing" | "staged" | "error";
 
 export type Document = {
   id: string;
@@ -73,12 +68,19 @@ export type ChatAnswer = {
   insufficient: boolean;
 };
 
+export type ChatStreamEvent =
+  | { type: "status"; message: string }
+  | { type: "delta"; text: string }
+  | { type: "final"; answer: ChatAnswer }
+  | { type: "error"; error: string };
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
   citations?: ChatCitation[];
   insufficient?: boolean;
+  streaming?: boolean;
 };
 
 export type Deadline = {
@@ -93,6 +95,7 @@ export type ReviewNote = { text: string; citation?: Citation };
 
 export type MatterReview = {
   stage: string;
+  stageCitation?: Citation;
   lastEvent: ReviewNote;
   urgentIssues: ReviewNote[];
   missingDocs: string[];
@@ -125,7 +128,9 @@ export type Handoff = {
   latestNote?: {
     executiveSummary?: string;
     currentProceduralStatus?: string;
+    currentProceduralStatusCitation?: Citation;
     nextRequiredStep?: string;
+    nextRequiredStepCitation?: Citation;
     liveDeadlines?: ReviewNote[];
     riskFlags?: ReviewNote[];
     fileBasedFacts?: ReviewNote[];

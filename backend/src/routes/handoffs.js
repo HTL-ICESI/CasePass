@@ -129,6 +129,18 @@ router.post('/handoffs/:id/clearance-records', async (req, res) => {
   }
 });
 
+router.patch('/handoffs/:id/recipient', async (req, res) => {
+  try {
+    if (!req.body.receiving_solicitor_id) {
+      return res.status(422).json({ error: 'A new receiving_solicitor_id is required.' });
+    }
+    const handoff = await handoffService.setRecipient(req.params.id, req.body.receiving_solicitor_id, req.user.id);
+    return res.json(handoff);
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
 router.patch('/handoffs/:id/representation', async (req, res) => {
   try {
     const handoff = await handoffService.setRepresentationType(req.params.id, req.body.handoff_type, req.user.id);
@@ -202,6 +214,53 @@ router.get('/handoffs/:id/documents', async (req, res) => {
   }
 });
 
+router.delete('/handoffs/:id/documents/:docId', async (req, res) => {
+  try {
+    const deleted = await handoffService.deleteHandoffDocument(req.params.id, req.params.docId, req.user.id);
+    try {
+      if (deleted.filename) {
+        const filePath = path.join(uploadDir, deleted.filename);
+        if (fs.existsSync(filePath)) {
+          await fs.promises.unlink(filePath);
+        }
+      }
+    } catch (cleanupError) {
+      console.warn('[handoffs] failed to remove file on disk', {
+        docId: req.params.docId,
+        reason: cleanupError.message,
+      });
+    }
+    return res.status(204).end();
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+router.get('/handoffs/:id/documents/:docId/file', async (req, res) => {
+  try {
+    const documents = await handoffService.getDocumentMap(req.params.id, req.user.id, req.user.role);
+    const document = documents.find((row) => row.id === req.params.docId);
+
+    if (!document) {
+      return res.status(404).json({ error: 'Document not found for this handoff.' });
+    }
+
+    const filePath = path.join(uploadDir, document.filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(410).json({ error: 'The file is no longer available on disk.' });
+    }
+
+    const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+    const safeName = (document.original_name || 'document.pdf').replace(/"/g, '');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `${disposition}; filename="${safeName}"`);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
 router.get('/handoffs/:id/document-map', async (req, res) => {
   try {
     const documentMap = await handoffService.getDocumentMap(req.params.id, req.user.id, req.user.role);
@@ -213,7 +272,27 @@ router.get('/handoffs/:id/document-map', async (req, res) => {
 
 router.post('/handoffs/:id/matter-reviews', async (req, res) => {
   try {
-    await handoffService.beginPackBuilding(req.params.id, req.user.id);
+    const handoff = await handoffService.getHandoffRow(req.params.id);
+    if (req.user.role !== 'admin' && handoff.sending_solicitor_id !== req.user.id) {
+      return res.status(403).json({ error: 'Only the sending solicitor may generate a matter review before pack release.' });
+    }
+
+    const indexedDocuments = await query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM documents
+        WHERE handoff_id = $1
+          AND status = 'indexed'
+      `,
+      [req.params.id],
+    );
+    if (indexedDocuments.rows[0].total === 0) {
+      return res.status(409).json({ error: 'At least one indexed document is required before AI review.', code: 'NO_INDEXED_DOCUMENTS' });
+    }
+
+    if (handoff.status === 'file_upload_open' || handoff.status === 'pack_building') {
+      await handoffService.beginPackBuilding(req.params.id, req.user.id);
+    }
     const review = await aiHandoffService.reviewMatter(req.params.id, req.user.id);
     return res.status(201).json(review);
   } catch (error) {

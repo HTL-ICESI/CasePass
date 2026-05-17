@@ -6,7 +6,9 @@ import type { Citation, Handoff, MatterReview } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CitationChip } from "@/components/app/citation-chip";
+import { ProseWithCitations } from "@/components/app/prose-with-citations";
 import { useAuth } from "@/lib/auth";
+import { useOpenCitation } from "@/lib/handoff-citation-context";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/note")({
@@ -17,6 +19,7 @@ export const Route = createFileRoute("/_authenticated/handoffs/$id/note")({
 function NotePage() {
   const { id } = Route.useParams();
   const { user } = useAuth();
+  const openCitation = useOpenCitation();
   const queryClient = useQueryClient();
 
   const handoff = useQuery({
@@ -41,16 +44,22 @@ function NotePage() {
       ]);
       toast.success("Handover note generated.");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not generate the handover note."),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not generate the handover note."),
   });
 
   const approveNote = useMutation({
-    mutationFn: () => api.approveHandoverNote(id, h?.noteId || "", { approved: true, text: "Approved from frontend workflow." }),
+    mutationFn: () =>
+      api.approveHandoverNote(id, h?.noteId || "", {
+        approved: true,
+        text: "Approved from frontend workflow.",
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
       toast.success("Handover note approved.");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not approve the note."),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not approve the note."),
   });
 
   const releasePack = useMutation({
@@ -59,7 +68,8 @@ function NotePage() {
       await queryClient.invalidateQueries({ queryKey: ["handoff", id] });
       toast.success("Handover pack released.");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not release the handoff pack."),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not release the handoff pack."),
   });
 
   if (handoff.isLoading || review.isLoading) {
@@ -76,10 +86,7 @@ function NotePage() {
     );
   }
 
-  const onDownload = async () => {
-    const { default: jsPDF } = await import("jspdf");
-    downloadNotePdf(jsPDF, h, r);
-  };
+  const onDownload = () => downloadNoteText(h, r);
   const onPrint = () => window.print();
 
   return (
@@ -91,19 +98,34 @@ function NotePage() {
         </div>
         <div className="flex items-center gap-2 print:hidden">
           {isSender && h?.backendStatus === "pack_building" && (
-            <Button variant="outline" size="sm" onClick={() => generateNote.mutate()} disabled={generateNote.isPending}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => generateNote.mutate()}
+              disabled={generateNote.isPending}
+            >
               {generateNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Generate note
             </Button>
           )}
           {isSender && h?.backendStatus === "pack_review" && h?.noteId && !h.noteApproved && (
-            <Button variant="outline" size="sm" onClick={() => approveNote.mutate()} disabled={approveNote.isPending}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => approveNote.mutate()}
+              disabled={approveNote.isPending}
+            >
               {approveNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Approve note
             </Button>
           )}
           {isSender && h?.backendStatus === "pack_review" && h?.noteApproved && (
-            <Button variant="outline" size="sm" onClick={() => releasePack.mutate()} disabled={releasePack.isPending}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => releasePack.mutate()}
+              disabled={releasePack.isPending}
+            >
               {releasePack.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Release pack
             </Button>
@@ -112,7 +134,7 @@ function NotePage() {
             <Printer className="h-3.5 w-3.5" /> Print
           </Button>
           <Button size="sm" onClick={onDownload}>
-            <Download className="h-3.5 w-3.5" /> Download PDF
+            <Download className="h-3.5 w-3.5" /> Download note
           </Button>
         </div>
       </div>
@@ -125,33 +147,44 @@ function NotePage() {
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
             CasePass · Handover note
           </p>
-          <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight">
-            {h.caseName}
-          </h1>
+          <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight">{h.caseName}</h1>
           <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
             <Row label="Matter type" value={h.matterType} />
             <Row label="Court" value={h.court} />
             <Row label="Parties" value={`${h.parties.plaintiff} v. ${h.parties.defendant}`} />
-            <Row
-              label="Next hearing"
-              value={h.nextHearingAt ? formatDate(h.nextHearingAt) : "—"}
-            />
+            <Row label="Next hearing" value={h.nextHearingAt ? formatDate(h.nextHearingAt) : "—"} />
             <Row label="File volume" value={`${h.documentsCount} docs · ${h.pagesIndexed} pages`} />
             <Row label="Prepared" value={formatDate(new Date().toISOString())} />
           </dl>
         </header>
 
         <Block title="Executive summary">
-          <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-            {note?.executiveSummary || h.summary}
-          </p>
+          <ProseWithCitations
+            text={note?.executiveSummary || h.summary}
+            onOpenCitation={openCitation}
+          />
         </Block>
 
         <Block title="Where we stand">
-          <p className="font-display text-base font-medium text-foreground">{note?.currentProceduralStatus || r.stage}</p>
+          <p className="font-display text-base font-medium text-foreground">
+            {note?.currentProceduralStatus || r.stage}{" "}
+            {(note?.currentProceduralStatusCitation || r.stageCitation) && (
+              <CitationChip
+                citation={(note?.currentProceduralStatusCitation || r.stageCitation)!}
+                anchorText={note?.currentProceduralStatus || r.stage}
+                onOpenDocument={openCitation}
+              />
+            )}
+          </p>
           <p className="mt-3 text-sm leading-relaxed text-foreground">
             {r.lastEvent.text}{" "}
-            {r.lastEvent.citation && <CitationChip citation={r.lastEvent.citation} />}
+            {r.lastEvent.citation && (
+              <CitationChip
+                citation={r.lastEvent.citation}
+                anchorText={r.lastEvent.text}
+                onOpenDocument={openCitation}
+              />
+            )}
           </p>
         </Block>
 
@@ -166,7 +199,14 @@ function NotePage() {
                     {String(i + 1).padStart(2, "0")}
                   </span>
                   <span>
-                    {u.text} {u.citation && <CitationChip citation={u.citation} />}
+                    {u.text}{" "}
+                    {u.citation && (
+                      <CitationChip
+                        citation={u.citation}
+                        anchorText={u.text}
+                        onOpenDocument={openCitation}
+                      />
+                    )}
                   </span>
                 </li>
               ))}
@@ -179,23 +219,38 @@ function NotePage() {
             <p className="text-sm text-muted-foreground">None scheduled.</p>
           ) : (
             <ul className="space-y-2 text-sm text-foreground">
-              {note?.liveDeadlines?.length ? note.liveDeadlines.map((d, index) => (
-                <li key={`note-${index}`} className="flex items-baseline justify-between gap-4">
-                  <span>
-                    {d.text} {d.citation && <CitationChip citation={d.citation} />}
-                  </span>
-                </li>
-              )) : h.deadlines.map((d) => (
-                <li key={d.id} className="flex items-baseline justify-between gap-4">
-                  <span>
-                    {d.label}{" "}
-                    {d.citation && <CitationChip citation={d.citation} />}
-                  </span>
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {formatDate(d.dueAt)}
-                  </span>
-                </li>
-              ))}
+              {note?.liveDeadlines?.length
+                ? note.liveDeadlines.map((d, index) => (
+                    <li key={`note-${index}`} className="flex items-baseline justify-between gap-4">
+                      <span>
+                        {d.text}{" "}
+                        {d.citation && (
+                          <CitationChip
+                            citation={d.citation}
+                            anchorText={d.text}
+                            onOpenDocument={openCitation}
+                          />
+                        )}
+                      </span>
+                    </li>
+                  ))
+                : h.deadlines.map((d) => (
+                    <li key={d.id} className="flex items-baseline justify-between gap-4">
+                      <span>
+                        {d.label}{" "}
+                        {d.citation && (
+                          <CitationChip
+                            citation={d.citation}
+                            anchorText={d.label}
+                            onOpenDocument={openCitation}
+                          />
+                        )}
+                      </span>
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        {formatDate(d.dueAt)}
+                      </span>
+                    </li>
+                  ))}
             </ul>
           )}
         </Block>
@@ -217,8 +272,14 @@ function NotePage() {
 
         <Block title="Recommended next step">
           <p className="text-sm leading-relaxed text-foreground">
-            {(note?.nextRequiredStep || r.nextStep.text)}{" "}
-            {!note?.nextRequiredStep && r.nextStep.citation && <CitationChip citation={r.nextStep.citation} />}
+            {note?.nextRequiredStep || r.nextStep.text}{" "}
+            {!note?.nextRequiredStep && r.nextStep.citation && (
+              <CitationChip
+                citation={r.nextStep.citation}
+                anchorText={r.nextStep.text}
+                onOpenDocument={openCitation}
+              />
+            )}
           </p>
         </Block>
 
@@ -227,7 +288,14 @@ function NotePage() {
             <ul className="space-y-3 text-sm leading-relaxed text-foreground">
               {note.fileBasedFacts.map((fact, index) => (
                 <li key={index}>
-                  {fact.text} {fact.citation && <CitationChip citation={fact.citation} />}
+                  {fact.text}{" "}
+                  {fact.citation && (
+                    <CitationChip
+                      citation={fact.citation}
+                      anchorText={fact.text}
+                      onOpenDocument={openCitation}
+                    />
+                  )}
                 </li>
               ))}
             </ul>
@@ -286,57 +354,7 @@ function citeStr(c?: Citation) {
   return c ? ` [Doc: ${c.doc}, p.${c.page}]` : "";
 }
 
-type JsPDFCtor = typeof import("jspdf").default;
-
-function downloadNotePdf(JsPDF: JsPDFCtor, h: Handoff, r: MatterReview) {
-  const doc = new JsPDF({ unit: "pt", format: "a4" });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const margin = 56;
-  const maxW = pageW - margin * 2;
-  let y = margin;
-
-  const ensure = (need: number) => {
-    if (y + need > pageH - margin) {
-      doc.addPage();
-      y = margin;
-    }
-  };
-
-  const writeWrapped = (text: string, size: number, opts: { bold?: boolean; color?: [number, number, number]; gap?: number } = {}) => {
-    doc.setFont("helvetica", opts.bold ? "bold" : "normal");
-    doc.setFontSize(size);
-    const [r1, g1, b1] = opts.color ?? [20, 20, 20];
-    doc.setTextColor(r1, g1, b1);
-    const lines = doc.splitTextToSize(text, maxW);
-    const lineH = size * 1.35;
-    ensure(lines.length * lineH);
-    doc.text(lines, margin, y);
-    y += lines.length * lineH + (opts.gap ?? 0);
-  };
-
-  const heading = (label: string) => {
-    ensure(28);
-    y += 14;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(120, 120, 120);
-    doc.text(label.toUpperCase(), margin, y);
-    y += 6;
-    doc.setDrawColor(220, 220, 220);
-    doc.line(margin, y, pageW - margin, y);
-    y += 14;
-  };
-
-  // Header
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(120, 120, 120);
-  doc.text("CASEPASS · HANDOVER NOTE", margin, y);
-  y += 22;
-  writeWrapped(h.caseName, 20, { bold: true, gap: 10 });
-
-  // Metadata block
+function downloadNoteText(h: Handoff, r: MatterReview) {
   const meta: Array<[string, string]> = [
     ["Matter type", h.matterType],
     ["Court", h.court],
@@ -345,68 +363,48 @@ function downloadNotePdf(JsPDF: JsPDFCtor, h: Handoff, r: MatterReview) {
     ["File volume", `${h.documentsCount} docs · ${h.pagesIndexed} pages`],
     ["Prepared", formatDate(new Date().toISOString())],
   ];
-  doc.setFontSize(10);
-  meta.forEach(([k, v]) => {
-    ensure(16);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(120, 120, 120);
-    doc.text(k, margin, y);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(20, 20, 20);
-    doc.text(v, margin + 110, y);
-    y += 14;
-  });
 
-  heading("Executive summary");
-  writeWrapped(h.summary, 11);
-
-  heading("Where we stand");
-  writeWrapped(r.stage, 12, { bold: true, gap: 4 });
-  writeWrapped(r.lastEvent.text + citeStr(r.lastEvent.citation), 11);
-
-  heading("Urgent issues");
-  if (r.urgentIssues.length === 0) {
-    writeWrapped("None flagged.", 11, { color: [120, 120, 120] });
-  } else {
-    r.urgentIssues.forEach((u, i) => {
-      writeWrapped(`${i + 1}. ${u.text}${citeStr(u.citation)}`, 11, { gap: 4 });
-    });
-  }
-
-  heading("Deadlines");
-  if (h.deadlines.length === 0) {
-    writeWrapped("None scheduled.", 11, { color: [120, 120, 120] });
-  } else {
-    h.deadlines.forEach((d) => {
-      writeWrapped(`• ${formatDate(d.dueAt)} — ${d.label}${citeStr(d.citation)}`, 11, { gap: 2 });
-    });
-  }
-
-  heading("Missing documents");
-  if (r.missingDocs.length === 0) {
-    writeWrapped("File complete.", 11, { color: [120, 120, 120] });
-  } else {
-    r.missingDocs.forEach((m) => writeWrapped(`• ${m}`, 11, { gap: 2 }));
-  }
-
-  heading("Recommended next step");
-  writeWrapped(r.nextStep.text + citeStr(r.nextStep.citation), 11);
-
-  // Footer on every page
-  const pageCount = doc.getNumberOfPages();
-  for (let i = 1; i <= pageCount; i++) {
-    doc.setPage(i);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
-    doc.setTextColor(150, 150, 150);
-    doc.text(
-      "Generated by CasePass · All assertions grounded in cited documents.",
-      margin,
-      pageH - 28,
-    );
-    doc.text(`${i} / ${pageCount}`, pageW - margin, pageH - 28, { align: "right" });
-  }
-
+  const sections = [
+    "CASEPASS - HANDOVER NOTE",
+    "",
+    h.caseName,
+    "",
+    ...meta.map(([label, value]) => `${label}: ${value}`),
+    "",
+    "Executive summary",
+    h.summary,
+    "",
+    "Where we stand",
+    r.stage,
+    `${r.lastEvent.text}${citeStr(r.lastEvent.citation)}`,
+    "",
+    "Urgent issues",
+    ...(r.urgentIssues.length
+      ? r.urgentIssues.map((item, index) => `${index + 1}. ${item.text}${citeStr(item.citation)}`)
+      : ["None flagged."]),
+    "",
+    "Deadlines",
+    ...(h.deadlines.length
+      ? h.deadlines.map(
+          (deadline) =>
+            `${formatDate(deadline.dueAt)} - ${deadline.label}${citeStr(deadline.citation)}`,
+        )
+      : ["None scheduled."]),
+    "",
+    "Missing documents",
+    ...(r.missingDocs.length ? r.missingDocs : ["File complete."]),
+    "",
+    "Recommended next step",
+    `${r.nextStep.text}${citeStr(r.nextStep.citation)}`,
+    "",
+    "Generated by CasePass. All assertions grounded in cited documents.",
+  ];
   const safe = h.caseName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-  doc.save(`casepass-handover-${safe}.pdf`);
+  const blob = new Blob([sections.join("\n")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `casepass-handover-${safe}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
 }

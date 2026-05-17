@@ -8,6 +8,7 @@ import {
   FileText,
   Loader2,
   UploadCloud,
+  Wand2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -97,46 +98,83 @@ function NewHandoffPage() {
   });
   const [uploads, setUploads] = useState<UploadItem[]>([]);
 
+  const fillTestData = useCallback(() => {
+    const hearing = new Date();
+    hearing.setDate(hearing.getDate() + 30);
+    const stamp = new Date().toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const otherRecipient = recipients.data?.[0];
+
+    setForm({
+      caseName: `Whitfield v. Marrow Holdings — ${stamp}`,
+      matterType: "Commercial litigation",
+      court: "Commercial Court",
+      plaintiff: "Whitfield Industries Ltd",
+      defendant: "Marrow Holdings plc",
+      receiverId: otherRecipient?.id || "",
+      nextHearingAt: hearing.toISOString(),
+      summary:
+        "Breach of supply agreement dated March 2024. Claim for ~£420k in damages plus interest. CMC fixed; defence due in 14 days. Pleadings, witness statements, and disclosure index attached.",
+    });
+
+    if (otherRecipient) {
+      toast.success(`Test matter filled — receiver: ${otherRecipient.name}`);
+    } else {
+      toast.warning("Test matter filled. Select a receiving counsel before continuing.");
+    }
+  }, [recipients.data]);
+
   const matterValid =
     form.caseName.trim().length > 2 &&
-      form.matterType &&
-      form.court &&
-      form.plaintiff.trim() &&
-      form.defendant.trim() &&
-      form.receiverId &&
-      form.summary.trim().length > 10;
+    form.matterType &&
+    form.court &&
+    form.plaintiff.trim() &&
+    form.defendant.trim() &&
+    form.receiverId &&
+    form.summary.trim().length > 10;
 
-  const allIndexed =
-    uploads.length > 0 && uploads.every((u) => u.status === "indexed");
+  const allIndexed = uploads.length > 0 && uploads.every((u) => u.status === "indexed");
 
   const createMut = useMutation({
     mutationFn: api.createHandoff,
     onSuccess: (h) => {
       queryClient.invalidateQueries({ queryKey: ["handoffs"] });
+      queryClient.invalidateQueries({ queryKey: ["inbox"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-kpis"] });
-      const staged = uploads.length > 0 && form.receiverId !== user?.id;
-      toast.success(staged
-        ? `Handoff created — ${h.caseName}. Files are staged locally until the receiver approves clearance.`
-        : `Handoff created — ${h.caseName}`);
+      toast.success(`Handoff created — ${h.caseName}`);
       navigate({ to: "/handoffs/$id", params: { id: h.id } });
     },
-    onError: () => toast.error("Could not create handoff. Try again."),
+    onError: (error) => {
+      const body = error instanceof Error ? (error as Error & { body?: unknown }).body : null;
+      const fieldErrors =
+        body && typeof body === "object" && "field_errors" in body
+          ? Object.values((body as { field_errors?: Record<string, string> }).field_errors || {})
+          : [];
+      const message =
+        fieldErrors[0] ||
+        (error instanceof Error ? error.message : "Could not create handoff. Try again.");
+      toast.error(message);
+    },
   });
 
   const submit = () => {
     if (!user || !matterValid || !allIndexed) return;
-      createMut.mutate({
-        caseName: form.caseName.trim(),
-        matterType: form.matterType as MatterType,
-        court: form.court as Court,
-        plaintiff: form.plaintiff.trim(),
-        defendant: form.defendant.trim(),
-        receiverId: form.receiverId,
-        nextHearingAt: form.nextHearingAt || undefined,
-        summary: form.summary.trim(),
-        ownerId: user.id,
-        files: uploads.map((u) => ({ name: u.name, size: u.size, pages: u.pages, file: u.file })),
-      });
+    createMut.mutate({
+      caseName: form.caseName.trim(),
+      matterType: form.matterType as MatterType,
+      court: form.court as Court,
+      plaintiff: form.plaintiff.trim(),
+      defendant: form.defendant.trim(),
+      receiverId: form.receiverId,
+      nextHearingAt: form.nextHearingAt || undefined,
+      summary: form.summary.trim(),
+      ownerId: user.id,
+      files: uploads.map((u) => ({ name: u.name, size: u.size, pages: u.pages, file: u.file })),
+    });
   };
 
   return (
@@ -149,30 +187,54 @@ function NewHandoffPage() {
         <ArrowLeft className="h-3.5 w-3.5" /> Back to dashboard
       </button>
 
-      <header className="mt-4">
-        <p className="font-mono text-xs uppercase tracking-[0.18em] text-indigo">
-          Step {step} of 3 — {STEPS[step - 1].label}
-        </p>
-        <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight md:text-4xl">
-          New handoff
-        </h1>
-        <p className="mt-2 max-w-xl text-sm text-muted-foreground">
-          Capture the matter, drop the pleadings and exhibits, then send the
-          brief to receiving counsel.
-        </p>
+      <header className="mt-4 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="font-mono text-xs uppercase tracking-[0.18em] text-indigo">
+            Step {step} of 3 — {STEPS[step - 1].label}
+          </p>
+          <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight md:text-4xl">
+            New handoff
+          </h1>
+          <p className="mt-2 max-w-xl text-sm text-muted-foreground">
+            Capture the matter, drop the pleadings and exhibits, then send the brief to receiving
+            counsel.
+          </p>
+        </div>
+        {step === 1 && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={fillTestData}
+            disabled={recipients.isLoading}
+            className="shrink-0"
+          >
+            <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+            Fill with test data
+          </Button>
+        )}
       </header>
 
       <Stepper step={step} />
 
       <div className="mt-8 cp-fade-up rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-2)] md:p-8">
         {step === 1 && (
-          <MatterStep form={form} setForm={setForm} recipients={recipients.data ?? []} currentUserId={user?.id ?? ""} />
+          <MatterStep
+            form={form}
+            setForm={setForm}
+            recipients={recipients.data ?? []}
+            recipientsError={recipients.error}
+          />
         )}
-        {step === 2 && (
-          <UploadStep uploads={uploads} setUploads={setUploads} />
-        )}
+        {step === 2 && <UploadStep uploads={uploads} setUploads={setUploads} />}
         {step === 3 && (
-          <ReviewStep form={form} uploads={uploads} />
+          <ReviewStep
+            form={form}
+            uploads={uploads}
+            recipientName={
+              recipients.data?.find((recipient) => recipient.id === form.receiverId)?.name || "—"
+            }
+          />
         )}
       </div>
 
@@ -188,17 +250,12 @@ function NewHandoffPage() {
         {step < 3 ? (
           <Button
             onClick={() => setStep((s) => s + 1)}
-            disabled={
-              (step === 1 && !matterValid) || (step === 2 && !allIndexed)
-            }
+            disabled={(step === 1 && !matterValid) || (step === 2 && !allIndexed)}
           >
             Continue <ArrowRight className="ml-1.5 h-4 w-4" />
           </Button>
         ) : (
-          <Button
-            onClick={submit}
-            disabled={createMut.isPending || !matterValid || !allIndexed}
-          >
+          <Button onClick={submit} disabled={createMut.isPending || !matterValid || !allIndexed}>
             {createMut.isPending ? (
               <>
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Sending…
@@ -264,15 +321,16 @@ function MatterStep({
   form,
   setForm,
   recipients,
-  currentUserId,
+  recipientsError,
 }: {
   form: MatterForm;
   setForm: React.Dispatch<React.SetStateAction<MatterForm>>;
   recipients: Awaited<ReturnType<typeof api.listAssignableUsers>>;
-  currentUserId: string;
+  recipientsError: Error | null;
 }) {
   const set = <K extends keyof MatterForm>(k: K, v: MatterForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+  const recipientOptions = recipients;
 
   return (
     <div className="grid gap-5">
@@ -289,32 +347,30 @@ function MatterStep({
       <div className="grid gap-5 md:grid-cols-2">
         <div className="grid gap-2">
           <Label>Matter type</Label>
-          <Select
-            value={form.matterType}
-            onValueChange={(v) => set("matterType", v as MatterType)}
-          >
+          <Select value={form.matterType} onValueChange={(v) => set("matterType", v as MatterType)}>
             <SelectTrigger>
               <SelectValue placeholder="Select…" />
             </SelectTrigger>
             <SelectContent>
               {MATTER_TYPES.map((t) => (
-                <SelectItem key={t} value={t}>{t}</SelectItem>
+                <SelectItem key={t} value={t}>
+                  {t}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
         <div className="grid gap-2">
           <Label>Court</Label>
-          <Select
-            value={form.court}
-            onValueChange={(v) => set("court", v as Court)}
-          >
+          <Select value={form.court} onValueChange={(v) => set("court", v as Court)}>
             <SelectTrigger>
               <SelectValue placeholder="Select…" />
             </SelectTrigger>
             <SelectContent>
               {COURTS.map((c) => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -342,18 +398,17 @@ function MatterStep({
 
       <div className="grid gap-2">
         <Label>Receiving counsel / recipient</Label>
-        <Select
-          value={form.receiverId}
-          onValueChange={(value) => set("receiverId", value)}
-        >
+        <Select value={form.receiverId} onValueChange={(value) => set("receiverId", value)}>
           <SelectTrigger>
             <SelectValue placeholder="Select who will receive the handoff…" />
           </SelectTrigger>
           <SelectContent>
-            {currentUserId && (
-              <SelectItem value={currentUserId}>Assign to me (self-test / solo flow)</SelectItem>
+            {recipientOptions.length === 0 && (
+              <SelectItem value="none" disabled>
+                {recipientsError ? "Could not load recipients" : "No other active users available"}
+              </SelectItem>
             )}
-            {recipients.map((recipient) => (
+            {recipientOptions.map((recipient) => (
               <SelectItem key={recipient.id} value={recipient.id}>
                 {recipient.name} — {recipient.title}
               </SelectItem>
@@ -361,7 +416,9 @@ function MatterStep({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          For the fastest local end-to-end demo, choose “Assign to me” so the same user can clear and progress the workflow.
+          {recipientsError
+            ? "Refresh the page or sign in again if this keeps happening."
+            : "The selected recipient will see this matter in their inbox as soon as the handoff is created."}
         </p>
       </div>
 
@@ -445,8 +502,7 @@ function UploadStep({
     return () => clearInterval(t);
   }, [uploads, setUploads]);
 
-  const remove = (id: string) =>
-    setUploads((prev) => prev.filter((u) => u.id !== id));
+  const remove = (id: string) => setUploads((prev) => prev.filter((u) => u.id !== id));
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -515,14 +571,10 @@ function UploadStep({
                   <span
                     className={
                       "font-mono text-[10px] uppercase tracking-wider " +
-                      (u.status === "indexed"
-                        ? "text-mint"
-                        : "text-muted-foreground")
+                      (u.status === "indexed" ? "text-mint" : "text-muted-foreground")
                     }
                   >
-                    {u.status === "indexed"
-                      ? "Indexed"
-                      : `Indexing ${Math.round(u.progress)}%`}
+                    {u.status === "indexed" ? "Indexed" : `Indexing ${Math.round(u.progress)}%`}
                   </span>
                 </div>
               </div>
@@ -540,9 +592,7 @@ function UploadStep({
       )}
 
       {uploads.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          At least one PDF is required to continue.
-        </p>
+        <p className="text-xs text-muted-foreground">At least one PDF is required to continue.</p>
       )}
     </div>
   );
@@ -553,9 +603,11 @@ function UploadStep({
 function ReviewStep({
   form,
   uploads,
+  recipientName,
 }: {
   form: MatterForm;
   uploads: UploadItem[];
+  recipientName: string;
 }) {
   const totalPages = uploads.reduce((s, u) => s + u.pages, 0);
   return (
@@ -568,6 +620,7 @@ function ReviewStep({
           <Field label="Case" value={form.caseName} />
           <Field label="Type" value={form.matterType} />
           <Field label="Court" value={form.court} />
+          <Field label="Receiver" value={recipientName} />
           <Field
             label="Next hearing"
             value={

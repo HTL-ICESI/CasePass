@@ -58,9 +58,7 @@ export const mockClient: CasePassClient = {
     return {
       activeMatters: MOCK_HANDOFFS.filter((h) => h.status !== "closed").length,
       deadlinesThisWeek,
-      pendingHandoffs: MOCK_HANDOFFS.filter((h) =>
-        ["intake", "indexed"].includes(h.status),
-      ).length,
+      pendingHandoffs: MOCK_HANDOFFS.filter((h) => ["intake", "indexed"].includes(h.status)).length,
       pagesIndexed: MOCK_HANDOFFS.reduce((sum, h) => sum + h.pagesIndexed, 0),
     } satisfies DashboardKpis;
   },
@@ -69,12 +67,15 @@ export const mockClient: CasePassClient = {
     const totalPages = input.files.reduce((s, f) => s + f.pages, 0);
     const handoff: Handoff = {
       id: `hf_${Date.now().toString(36)}`,
+      caseId: `case_${Date.now().toString(36)}`,
       caseName: input.caseName,
       matterType: input.matterType,
       court: input.court,
       parties: { plaintiff: input.plaintiff, defendant: input.defendant },
       status: "indexed",
+      backendStatus: "pack_released",
       ownerId: input.ownerId,
+      receivingId: input.receiverId,
       createdAt: new Date().toISOString(),
       nextHearingAt: input.nextHearingAt,
       summary: input.summary,
@@ -86,6 +87,34 @@ export const mockClient: CasePassClient = {
     };
     MOCK_HANDOFFS.unshift(handoff);
     return handoff;
+  },
+  async deleteCase(caseId) {
+    await latency(120, 260);
+    const index = MOCK_HANDOFFS.findIndex((handoff) => handoff.caseId === caseId);
+    if (index >= 0) {
+      MOCK_HANDOFFS.splice(index, 1);
+    }
+  },
+  async deleteHandoffDocument(handoffId, docId) {
+    await latency(120, 260);
+    const documents = MOCK_DOCUMENTS[handoffId];
+    if (!documents) return;
+    const index = documents.findIndex((document) => document.id === docId);
+    if (index >= 0) {
+      documents.splice(index, 1);
+    }
+  },
+  async changeRecipient(handoffId, newRecipientId) {
+    await latency(120, 260);
+    const handoff = MOCK_HANDOFFS.find((entry) => entry.id === handoffId);
+    if (!handoff) {
+      throw new Error("Handoff not found.");
+    }
+    handoff.receivingId = newRecipientId;
+    return handoff;
+  },
+  async fetchDocumentBlobUrl() {
+    throw new Error("Document preview is only available with the real API.");
   },
   async getMatterReview(handoffId) {
     await latency(120, 280);
@@ -106,6 +135,19 @@ export const mockClient: CasePassClient = {
   async chatWithSources(handoffId, question) {
     await latency(700, 1400);
     return answerForMatter(handoffId, question);
+  },
+  async streamChatWithSources(handoffId, question, _history, onEvent) {
+    await latency(160, 260);
+    const answer = answerForMatter(handoffId, question);
+    onEvent({ type: "status", message: "Reading the indexed file..." });
+
+    for (const token of answer.text.match(/\S+\s*/g) || [answer.text]) {
+      await latency(18, 45);
+      onEvent({ type: "delta", text: token });
+    }
+
+    onEvent({ type: "final", answer });
+    return answer;
   },
   async listUpdates(handoffId) {
     await latency(120, 240);

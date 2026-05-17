@@ -309,6 +309,7 @@ async function loadFallbackChunksFromStorage(handoffId) {
       SELECT d.filename, d.original_name
       FROM documents d
       WHERE d.handoff_id = $1
+        AND d.status = 'indexed'
       ORDER BY d.uploaded_at ASC
     `,
     [handoffId],
@@ -343,8 +344,104 @@ async function getIndexedChunksForHandoff(handoffId, topK = 5) {
   }));
 }
 
+const MATTER_REVIEW_PROBES = [
+  { topic: 'stage_of_proceedings', query: 'stage of proceedings procedural posture case status' },
+  { topic: 'most_recent_event', query: 'most recent order ruling decision filing event' },
+  { topic: 'live_deadlines', query: 'deadline due date hearing date time limit must be filed by' },
+  { topic: 'urgent_issues', query: 'urgent risk issue jurisdiction conflict missing defect' },
+  { topic: 'next_step', query: 'next required step prepare file serve defence reply bundle' },
+  { topic: 'amounts', query: 'amount claimed total damages court fee currency value' },
+  { topic: 'parties', query: 'claimant defendant parties name address' },
+];
+
+async function getAllIndexedDocNames(handoffId) {
+  const result = await query(
+    `SELECT DISTINCT original_name FROM documents WHERE handoff_id = $1 AND status = 'indexed'`,
+    [handoffId],
+  );
+  return result.rows.map((row) => row.original_name);
+}
+
+async function getTopicSearchChunks(handoffId, topK = 12) {
+  const seen = new Map();
+  const upsert = (chunk, topic) => {
+    const key = `${chunk.doc_name}:${chunk.page}:${chunk.chunk_index}`;
+    const existing = seen.get(key);
+    if (!existing || chunk.score > existing.score) {
+      seen.set(key, { ...chunk, probe: topic });
+    }
+  };
+
+  for (const probe of MATTER_REVIEW_PROBES) {
+    try {
+      const probeChunks = await searchChunks(probe.query, handoffId, 3);
+      probeChunks.forEach((chunk) => upsert(chunk, probe.topic));
+    } catch (_error) {
+      // One bad probe should not break the rest of the summary retrieval.
+    }
+  }
+
+  try {
+    const docNames = await getAllIndexedDocNames(handoffId);
+    const coveredDocs = new Set(Array.from(seen.values()).map((chunk) => chunk.doc_name));
+    for (const docName of docNames) {
+      if (coveredDocs.has(docName)) continue;
+      const directChunks = await getChunksByDoc(handoffId, docName, 2);
+      directChunks.forEach((chunk) => upsert(chunk, `doc_coverage:${docName}`));
+    }
+  } catch (_error) {
+    // If document coverage lookup fails, return the topic probe results.
+  }
+
+  const ranked = Array.from(seen.values()).sort((left, right) => right.score - left.score).slice(0, topK);
+  if (ranked.length > 0) {
+    return ranked;
+  }
+
+  return getIndexedChunksForHandoff(handoffId, topK);
+}
+
 async function getCollection(handoffId) {
   return chroma.getOrCreateCollection({ name: `handoff_${handoffId}` });
+}
+
+async function getChunksByDoc(handoffId, docName, limit = 2) {
+  if (!hasOpenAiKey) {
+    const fallbackChunks = fallbackCollections.get(handoffId) || await loadFallbackChunksFromStorage(handoffId);
+    return fallbackChunks
+      .filter((chunk) => chunk.metadata?.doc_name === docName)
+      .slice(0, limit)
+      .map((chunk) => ({
+        text: chunk.text,
+        doc_name: chunk.metadata.doc_name,
+        page: chunk.metadata.page,
+        chunk_index: chunk.metadata.chunk_index,
+        score: 0.5,
+      }));
+  }
+
+  try {
+    const collection = await getCollection(handoffId);
+    const result = await collection.get({
+      where: { doc_name: docName },
+      limit,
+      include: ['documents', 'metadatas'],
+    });
+    const documents = result.documents || [];
+    const metadatas = result.metadatas || [];
+    return documents.map((text, index) => {
+      const meta = metadatas[index] || {};
+      return {
+        text,
+        doc_name: meta.doc_name || docName,
+        page: meta.page,
+        chunk_index: meta.chunk_index,
+        score: 0.5,
+      };
+    });
+  } catch (_error) {
+    return [];
+  }
 }
 
 async function updateDocumentStatus(docId, status, chunksCount, indexError = null) {
@@ -468,8 +565,8 @@ async function searchChunks(queryText, handoffId, topK = 5) {
     return documents
       .map((text, index) => {
         const metadata = metadatas[index] || {};
-        const distance = typeof distances[index] === 'number' ? distances[index] : 1;
-        const score = Math.max(0, Math.min(1, 1 - distance));
+        const distance = typeof distances[index] === 'number' ? distances[index] : Math.sqrt(2);
+        const score = Math.max(0, Math.min(1, 1 - (distance * distance) / 2));
 
         return {
           text,
@@ -479,7 +576,7 @@ async function searchChunks(queryText, handoffId, topK = 5) {
           score,
         };
       })
-      .filter((chunk) => chunk.score >= 0.5);
+      .filter((chunk) => chunk.score >= 0.35);
   } catch (error) {
     throw createRagError(error.message || 'Failed to search indexed chunks.', error.code || 'RAG_SEARCH_FAILED', error);
   }
@@ -491,4 +588,6 @@ module.exports = {
   indexDocument,
   searchChunks,
   getIndexedChunksForHandoff,
+  getTopicSearchChunks,
+  getChunksByDoc,
 };

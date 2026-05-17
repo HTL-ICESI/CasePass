@@ -11,16 +11,22 @@ export type StagedUpload = {
 
 const stagedUploads = new Map<string, StagedUpload[]>();
 
-export function stageUploads(handoffId: string, uploads: Array<{ file: File; pages: number; docType?: string }>) {
+export function stageUploads(
+  handoffId: string,
+  uploads: Array<{ file: File; pages: number; docType?: string }>,
+) {
   const existing = stagedUploads.get(handoffId) || [];
-  const next = uploads.map((upload) => ({
-    id: `${handoffId}:${upload.file.name}:${upload.file.size}:${Math.random().toString(36).slice(2, 7)}`,
-    handoffId,
-    file: upload.file,
-    pages: upload.pages,
-    docType: upload.docType || "pleading",
-    createdAt: new Date().toISOString(),
-  } satisfies StagedUpload));
+  const next = uploads.map(
+    (upload) =>
+      ({
+        id: `${handoffId}:${upload.file.name}:${upload.file.size}:${Math.random().toString(36).slice(2, 7)}`,
+        handoffId,
+        file: upload.file,
+        pages: upload.pages,
+        docType: upload.docType || "pleading",
+        createdAt: new Date().toISOString(),
+      }) satisfies StagedUpload,
+  );
 
   stagedUploads.set(handoffId, [...existing, ...next]);
 }
@@ -51,7 +57,7 @@ export function mapStagedUploadsToDocuments(handoffId: string): Document[] {
     pages: upload.pages,
     chunks: 0,
     privilege: "none",
-    status: "processing",
+    status: "staged",
     uploadedAt: upload.createdAt,
     rawPageCount: upload.pages,
   }));

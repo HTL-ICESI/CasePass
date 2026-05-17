@@ -49,9 +49,60 @@ function stripMarkdownFences(text) {
     .trim();
 }
 
+function extractJsonObject(text) {
+  const stripped = stripMarkdownFences(text);
+  const firstBrace = stripped.indexOf('{');
+  const lastBrace = stripped.lastIndexOf('}');
+
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return stripped.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  return stripped;
+}
+
+function stripJsonResponseText(text) {
+  let result = String(text || '');
+
+  const lastClose = result.lastIndexOf('</think>');
+  if (lastClose !== -1) {
+    result = result.slice(lastClose + '</think>'.length);
+  }
+
+  result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  return extractJsonObject(result);
+}
+
 function stripReasoningBlocks(text) {
-  return String(text || '')
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+  let result = String(text || '');
+
+  const lastClose = result.lastIndexOf('</think>');
+  if (lastClose !== -1) {
+    result = result.slice(lastClose + '</think>'.length);
+  }
+
+  result = result.replace(/<think>[\s\S]*?<\/think>/gi, '');
+
+  if (/Analyze User Input|Mental Refinement|Formulate Response|Key Discrepancies|Matter metadata:|Retrieved chunks:|I must|Draft:/i.test(result)) {
+    const finalMatch = result.match(/(?:Final Answer|Final Response|Answer|Draft)\s*:\s*([\s\S]+)$/i);
+    const finalText = finalMatch ? finalMatch[1].trim() : '';
+    return finalText.length >= 80 ? finalText : '';
+  }
+
+  const lines = result.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (/^[•\-*]\s+/.test(trimmed)) return true;
+    return /^(Yes\b|No\b|The\b|A\b|An\b|It\b|There\b|This\b|That\b|These\b|Those\b|£|\$|€|\d)/.test(trimmed);
+  });
+  if (startIndex > 0) {
+    result = lines.slice(startIndex).join('\n');
+  }
+
+  return result
+    .replace(/\n+(Check constraints|Constraints check|Prompt constraints|Draft|Analysis|Reasoning)\s*:[\s\S]*$/i, '')
+    .replace(/\n+(Done\.?|Proceeds?\.?|Output[^\n]*|Final Answer[^\n]*|Self-?Correction[^\n]*|\(Self[^\n]*)\s*$/gim, '')
     .trim();
 }
 
@@ -88,8 +139,94 @@ function ensureRelevantChunks(chunks) {
 function buildChunkBlock(chunks) {
   return chunks
     .slice(0, 5)
-    .map((chunk, index) => `[${index + 1}] (Doc: ${chunk.doc_name}, p.${chunk.page}, relevance: ${chunk.score.toFixed(2)})\n${chunk.text}`)
+    .map((chunk, index) => {
+      const score = typeof chunk.score === 'number' ? chunk.score.toFixed(2) : 'n/a';
+      return `[${index + 1}] (Doc: ${chunk.doc_name}, p.${chunk.page}, relevance: ${score})\n${chunk.text}`;
+    })
     .join('\n\n');
+}
+
+function trimToSentence(text, maxSentences = 1, maxLength = 240) {
+  const normalised = String(text || '').replace(/\s+/g, ' ').trim();
+  const sentences = normalised
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const result = (sentences.length ? sentences.slice(0, maxSentences).join(' ') : normalised).trim();
+
+  return result.length > maxLength ? `${result.slice(0, maxLength - 3).trim()}...` : result;
+}
+
+function extractAfter(text, pattern) {
+  const match = pattern.exec(text);
+  if (!match || typeof match.index !== 'number') {
+    return '';
+  }
+
+  return text.slice(match.index + match[0].length).trim();
+}
+
+function cleanLegalSnippet(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return 'Not found in file.';
+  }
+
+  const claim = extractAfter(text, /Brief details of claim\s+/i);
+  if (claim) {
+    return trimToSentence(claim, 1);
+  }
+
+  const directions = extractAfter(text, /Proposed directions:\s*/i);
+  if (directions) {
+    return trimToSentence(`Proposed directions: ${directions}`, 1);
+  }
+
+  const notice = extractAfter(text, /I \(We\) give notice that:\s*/i);
+  if (notice) {
+    return trimToSentence(notice.replace(/^n\s+/i, ''), 1);
+  }
+
+  const questionnaire = text.match(
+    /N181 Directions Questionnaire[\s\S]*?Completed on behalf of:\s*([^.]+?)(?:\s+A\.|\.)/i,
+  );
+  if (questionnaire) {
+    return `Directions questionnaire completed on behalf of ${questionnaire[1].trim()}.`;
+  }
+
+  const claimNumber = text.match(/Claim No\.?:\s*([A-Z0-9]+)/i)?.[1];
+  const issueDate = text.match(/Issue date:\s*([^F]+?)\s+Fee Account/i)?.[1];
+  if (/N1 Claim Form|Claim Form CPR Part 7/i.test(text) && (claimNumber || issueDate)) {
+    return `Claim form issued${issueDate ? ` on ${issueDate.trim()}` : ''}${claimNumber ? ` under claim ${claimNumber.trim()}` : ''}.`;
+  }
+
+  return trimToSentence(text, 1);
+}
+
+function normaliseConversationHistory(history = []) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+
+  return history
+    .filter((message) => ['user', 'assistant'].includes(message?.role) && typeof message?.text === 'string')
+    .slice(-6)
+    .map((message) => ({
+      role: message.role,
+      text: message.text.trim().replace(/\s+/g, ' ').slice(0, 900),
+    }))
+    .filter((message) => message.text);
+}
+
+function buildConversationBlock(history = []) {
+  const normalised = normaliseConversationHistory(history);
+  if (normalised.length === 0) {
+    return 'No earlier chat turns.';
+  }
+
+  return normalised
+    .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text}`)
+    .join('\n');
 }
 
 function collectStrings(value, collector = []) {
@@ -134,7 +271,24 @@ function buildGroundedChatAnswer(question, chunks) {
   }
 
   if (/step|procedural|next/i.test(questionText)) {
-    ['step', 'prepare', 'file', 'issued', 'allocated', 'review'].forEach((term) => queryTerms.add(term));
+    [
+      'step',
+      'prepare',
+      'file',
+      'issued',
+      'allocated',
+      'review',
+      'application',
+      'directions',
+      'proposes',
+      'disclosure',
+      'inspection',
+      'witness',
+      'expert',
+      'reports',
+      'consent',
+      'order',
+    ].forEach((term) => queryTerms.add(term));
   }
 
   const sentences = chunks.flatMap((chunk) => String(chunk.text || '')
@@ -150,16 +304,35 @@ function buildGroundedChatAnswer(question, chunks) {
       dateLike: /\b\d{1,2}\s+[A-Z][a-z]+\s+\d{4}\b|\bdue\b|\bissue date\b|\bhearing\b/i.test(sentence),
     })));
 
+  const dedupeRanked = (items) => {
+    const seen = new Set();
+    return items.filter((entry) => {
+      const key = entry.sentence.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 220);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
   let ranked = sentences
     .filter((entry) => entry.overlap > 0)
     .sort((left, right) => (right.overlap - left.overlap) || (right.score - left.score))
     .slice(0, 3);
+  ranked = dedupeRanked(ranked);
 
   if (ranked.length === 0) {
     ranked = sentences
       .filter((entry) => entry.dateLike)
       .sort((left, right) => right.score - left.score)
       .slice(0, 3);
+    ranked = dedupeRanked(ranked);
+  }
+
+  if (ranked.length === 0) {
+    ranked = sentences
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 2);
+    ranked = dedupeRanked(ranked);
   }
 
   if (ranked.length === 0) {
@@ -169,13 +342,52 @@ function buildGroundedChatAnswer(question, chunks) {
     };
   }
 
-  const answer = ranked
+  const hasTopicalMatch = ranked.some((entry) => entry.overlap > 0 || entry.dateLike);
+  const prefix = hasTopicalMatch
+    ? ''
+    : 'The file does not directly state the answer, but the closest indexed facts are: ';
+  const answer = `${prefix}${ranked
     .map((entry) => `${entry.sentence} [Doc: ${entry.doc_name}, p.${entry.page}]`)
-    .join(' ');
+    .join(' ')}`;
 
   return {
     answer,
     sources: mapCitationsToSources([answer], chunks),
+  };
+}
+
+function appendFallbackCitations(answer, chunks) {
+  const cleaned = String(answer || '').trim();
+  const sources = mapCitationsToSources([cleaned], chunks);
+  if (sources.length > 0) {
+    return { answer: cleaned, sources };
+  }
+
+  const uniqueChunks = [];
+  const seen = new Set();
+  for (const chunk of chunks || []) {
+    const key = `${chunk.doc_name}:${chunk.page}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueChunks.push(chunk);
+    if (uniqueChunks.length >= 2) break;
+  }
+
+  if (uniqueChunks.length === 0) {
+    return buildGroundedChatAnswer('', chunks);
+  }
+
+  const citationText = uniqueChunks
+    .map((chunk) => `[Doc: ${chunk.doc_name}, p.${chunk.page}]`)
+    .join(' ');
+  return {
+    answer: `${cleaned} ${citationText}`,
+    sources: uniqueChunks.map((chunk) => ({
+      doc_name: chunk.doc_name,
+      page: Number(chunk.page),
+      chunk_text: chunk.text,
+      score: chunk.score,
+    })),
   };
 }
 
@@ -208,7 +420,7 @@ function mapCitationsToSources(strings, chunks) {
 }
 
 function parseStructuredJson(responseText) {
-  return JSON.parse(stripMarkdownFences(responseText));
+  return JSON.parse(extractJsonObject(responseText));
 }
 
 async function callClaude(handoffId, system, userMessage, maxTokens, options = {}) {
@@ -227,7 +439,8 @@ async function callClaude(handoffId, system, userMessage, maxTokens, options = {
         ],
       });
 
-      const content = stripReasoningBlocks(response.choices?.[0]?.message?.content || '');
+      const rawContent = response.choices?.[0]?.message?.content || '';
+      const content = options.expectJson ? stripJsonResponseText(rawContent) : stripReasoningBlocks(rawContent);
       const latency = Date.now() - startedAt;
       const inputTokens = response.usage?.prompt_tokens ?? estimateTokenCount(`${system}\n${userMessage}`);
       const outputTokens = response.usage?.completion_tokens ?? estimateTokenCount(content);
@@ -259,9 +472,157 @@ async function callClaude(handoffId, system, userMessage, maxTokens, options = {
     const outputTokens = response.usage?.output_tokens ?? estimateTokenCount(extractResponseText(response));
     console.log(`[CLAUDE] handoff=${handoffId} tokens_in=${inputTokens} tokens_out=${outputTokens} latency=${latency}ms`);
 
-    return extractResponseText(response);
+    const rawContent = extractResponseText(response);
+    return options.expectJson ? stripJsonResponseText(rawContent) : rawContent;
   } catch (error) {
     throw createClaudeError(error.message || 'Claude request failed.', error.code || 'CLAUDE_REQUEST_FAILED', error);
+  }
+}
+
+function createReasoningStripper() {
+  let buffer = '';
+  let insideThinkBlock = false;
+  const tagLookbehind = 8;
+
+  function push(delta) {
+    buffer += String(delta || '');
+    let output = '';
+
+    while (buffer.length > 0) {
+      if (insideThinkBlock) {
+        const endMatch = buffer.match(/<\/think>/i);
+        if (!endMatch || typeof endMatch.index !== 'number') {
+          buffer = buffer.slice(-tagLookbehind);
+          return output;
+        }
+
+        buffer = buffer.slice(endMatch.index + endMatch[0].length);
+        insideThinkBlock = false;
+        continue;
+      }
+
+      const startMatch = buffer.match(/<think>/i);
+      if (!startMatch || typeof startMatch.index !== 'number') {
+        if (buffer.length <= tagLookbehind) {
+          return output;
+        }
+
+        output += buffer.slice(0, -tagLookbehind);
+        buffer = buffer.slice(-tagLookbehind);
+        return output;
+      }
+
+      output += buffer.slice(0, startMatch.index);
+      buffer = buffer.slice(startMatch.index + startMatch[0].length);
+      insideThinkBlock = true;
+    }
+
+    return output;
+  }
+
+  function flush() {
+    if (insideThinkBlock) {
+      buffer = '';
+      insideThinkBlock = false;
+      return '';
+    }
+
+    const output = buffer;
+    buffer = '';
+    return output;
+  }
+
+  return { push, flush };
+}
+
+async function callClaudeStream(handoffId, system, userMessage, maxTokens, options = {}, onToken = () => {}) {
+  const startedAt = Date.now();
+  let content = '';
+  const stripper = createReasoningStripper();
+  const emit = (delta) => {
+    content += String(delta || '');
+    const visible = stripper.push(delta);
+    if (visible) {
+      onToken(visible);
+    }
+  };
+
+  if (hasOpenAiCompatibleChat && openAiCompatibleClient) {
+    try {
+      const stream = await openAiCompatibleClient.chat.completions.create({
+        model: chatModel,
+        temperature: 0,
+        max_tokens: maxTokens,
+        stream: true,
+        ...(options.expectJson ? { response_format: { type: 'json_object' } } : {}),
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userMessage },
+        ],
+      });
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta?.content || '';
+        if (delta) {
+          emit(delta);
+        }
+      }
+
+      const tail = stripper.flush();
+      if (tail) {
+        onToken(tail);
+      }
+
+      const cleaned = stripReasoningBlocks(content);
+      const latency = Date.now() - startedAt;
+      const inputTokens = estimateTokenCount(`${system}\n${userMessage}`);
+      const outputTokens = estimateTokenCount(cleaned);
+      console.log(`[CLAUDE] handoff=${handoffId} tokens_in=${inputTokens} tokens_out=${outputTokens} latency=${latency}ms stream=true`);
+      return cleaned.trim();
+    } catch (error) {
+      throw createClaudeError(error.message || 'OpenAI-compatible chat stream failed.', error.code || 'CLAUDE_STREAM_FAILED', error);
+    }
+  }
+
+  if (!hasAnthropicKey) {
+    const latency = Date.now() - startedAt;
+    const inputTokens = estimateTokenCount(`${system}\n${userMessage}`);
+    console.log(`[CLAUDE] handoff=${handoffId} tokens_in=${inputTokens} tokens_out=0 latency=${latency}ms stream=true`);
+    throw createClaudeError('Anthropic API key is not configured for remote Claude calls.', 'CLAUDE_KEY_MISSING');
+  }
+
+  try {
+    const stream = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: maxTokens,
+      temperature: 0,
+      system,
+      messages: [{ role: 'user', content: userMessage }],
+      stream: true,
+    });
+
+    for await (const event of stream) {
+      const delta = event?.type === 'content_block_delta' && event.delta?.type === 'text_delta'
+        ? event.delta.text
+        : '';
+      if (delta) {
+        emit(delta);
+      }
+    }
+
+    const tail = stripper.flush();
+    if (tail) {
+      onToken(tail);
+    }
+
+    const cleaned = stripReasoningBlocks(content);
+    const latency = Date.now() - startedAt;
+    const inputTokens = estimateTokenCount(`${system}\n${userMessage}`);
+    const outputTokens = estimateTokenCount(cleaned);
+    console.log(`[CLAUDE] handoff=${handoffId} tokens_in=${inputTokens} tokens_out=${outputTokens} latency=${latency}ms stream=true`);
+    return cleaned.trim();
+  } catch (error) {
+    throw createClaudeError(error.message || 'Claude stream failed.', error.code || 'CLAUDE_STREAM_FAILED', error);
   }
 }
 
@@ -270,7 +631,7 @@ function localFactFromChunk(chunk, fallback = 'Not found in file.') {
     return fallback;
   }
 
-  const sentence = String(chunk.text || '').split(/(?<=[.!?])\s+/)[0]?.trim() || fallback;
+  const sentence = cleanLegalSnippet(chunk.text);
   return `${sentence} [Doc: ${chunk.doc_name}, p.${chunk.page}]`;
 }
 
@@ -286,7 +647,7 @@ function findChunkSentence(chunk, pattern, fallback = 'Not found in file.') {
     return fallback;
   }
 
-  return `${matched} [Doc: ${chunk.doc_name}, p.${chunk.page}]`;
+  return `${cleanLegalSnippet(matched)} [Doc: ${chunk.doc_name}, p.${chunk.page}]`;
 }
 
 function localClaudeLog(handoffId, payload) {
@@ -294,84 +655,135 @@ function localClaudeLog(handoffId, payload) {
   console.log(`[CLAUDE] handoff=${handoffId} tokens_in=0 tokens_out=${outputTokens} latency=0ms`);
 }
 
+const INSUFFICIENT_EVIDENCE = 'Insufficient evidence in the file to answer this question.';
+
+function buildChatFormatHint(question) {
+  const q = String(question || '').toLowerCase();
+  if (/\b(summary|overview|recap|tldr|resumen|sintetiza|panoramica|panorámica|que piensas|qué piensas|what do you think)\b/.test(q)) {
+    return 'Treat this as a factual case brief. Use 5-7 short bullets covering parties, claim type/amount, procedural stage, deadlines/hearing, key risks, and next step. Every bullet needs a citation.';
+  }
+  if (/\b(what are|which are|list|enumerate|cuales|cuáles|enumera|menciona|deadlines|risks|documents|missing)\b/.test(q)) {
+    return 'Use a short bulleted list. Only include items the chunks actually state.';
+  }
+  return 'Reply in 1-3 short sentences. Start with the practical answer. Cite the source sentence that supports it.';
+}
+
+function buildChatPromptParts(question, chunks, handoffContext = {}) {
+  const parties = handoffContext.parties
+    || [handoffContext.claimant, handoffContext.defendant].filter(Boolean).join(' v ')
+    || `${handoffContext.client_name || ''} v ${handoffContext.opponent_name || ''}`.trim()
+    || 'Unknown parties';
+  const matterName = handoffContext.case_title || handoffContext.case_name || handoffContext.name || 'Unknown matter';
+  const court = handoffContext.court || handoffContext.forum || handoffContext.court_or_tribunal || 'Unknown court';
+  const conversation = buildConversationBlock(handoffContext.conversation_history);
+
+  const systemPrompt = `You are CasePass Chat, a fast legal file assistant for solicitors, counsel, and receiving advocates in England and Wales.
+
+CRITICAL OUTPUT RULE:
+- Start directly with the user-facing answer.
+- Do not write analysis, planning, "Analyze user input", "mental refinement", "final answer", chain-of-thought, or reasoning steps.
+- Never mention the prompt, retrieval, metadata, chunks, or your internal process.
+- If there is a mismatch between matter metadata and source chunks, say that plainly in one sentence and cite the source chunks.
+
+Use the retrieved matter-file chunks as your evidence base, and use the matter metadata plus recent conversation only to understand context and follow-up questions.
+
+RESPONSE STYLE:
+- Be concise, direct, and helpful. Prefer 2-5 short bullets when the user asks what to do next.
+- Start with the answer, then add the key file evidence.
+- Write in plain English legal register. Use solicitor, counsel, claimant, defendant, proceedings, hearing, order.
+- Match the language of the user's question. Keep document names, party names, amounts, and citation format unchanged.
+- Do not expose chain-of-thought or describe your reasoning process.
+
+GROUNDING RULES:
+1. Every factual statement taken from the file must include an inline citation exactly as: [Doc: {doc_name}, p.{page}]
+2. Do not invent dates, orders, deadlines, parties, filings, or procedural history.
+3. You may give cautious practical next steps when they naturally follow from the cited file facts, but make clear if the file itself does not expressly say the step.
+4. For follow-up questions, resolve pronouns such as "it", "that", "next", or "what do I do" using the recent conversation.
+5. If the file contains related facts but not a complete answer, say what the file shows and what is missing. Ask for the missing document or instruction.
+6. Use exactly "${INSUFFICIENT_EVIDENCE}" only when the provided chunks and conversation contain no relevant file fact at all.`;
+
+  const userMessage = `Matter metadata:
+- Matter: ${matterName}
+- Court/forum: ${court}
+- Parties: ${parties}
+
+Recent conversation:
+${conversation}
+
+Retrieved source chunks:
+${buildChunkBlock(chunks)}
+
+Format hint:
+${buildChatFormatHint(question)}
+
+Current user question: ${question}
+
+/no_think`;
+
+  return { systemPrompt, userMessage };
+}
+
+function finaliseChatAnswer(question, answer, chunks) {
+  const cleaned = stripReasoningBlocks(answer).trim();
+
+  if (!cleaned) {
+    return buildGroundedChatAnswer(question, chunks);
+  }
+
+  if (cleaned === INSUFFICIENT_EVIDENCE) {
+    return buildGroundedChatAnswer(question, chunks);
+  }
+
+  if (/thinking process/i.test(cleaned)) {
+    return buildGroundedChatAnswer(question, chunks);
+  }
+
+  if (extractDocCitations(cleaned).length === 0) {
+    return appendFallbackCitations(cleaned, chunks);
+  }
+
+  const sources = mapCitationsToSources([cleaned], chunks);
+  if (sources.length === 0) {
+    return appendFallbackCitations(cleaned, chunks);
+  }
+
+  return { answer: cleaned, sources };
+}
+
 async function chatWithSources(question, chunks, handoffContext = {}) {
   const relevantChunks = ensureRelevantChunks(chunks);
   const handoffId = resolveHandoffId(handoffContext);
   if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
-    const hasDirectMatch = relevantChunks.some((chunk) => question.toLowerCase().split(/\s+/).some((term) => term.length > 3 && chunk.text.toLowerCase().includes(term.toLowerCase())));
-
-    if (!hasDirectMatch) {
-      localClaudeLog(handoffId, { answer: 'Insufficient evidence in the file to answer this question.' });
-      return {
-        answer: 'Insufficient evidence in the file to answer this question.',
-        sources: [],
-      };
-    }
-
-    const answer = relevantChunks
-      .slice(0, 2)
-      .map((chunk) => localFactFromChunk(chunk))
-      .join(' ');
-    const sources = mapCitationsToSources([answer], relevantChunks);
-    localClaudeLog(handoffId, { answer, sources });
-    return { answer, sources };
+    const grounded = buildGroundedChatAnswer(question, relevantChunks);
+    localClaudeLog(handoffId, grounded);
+    return grounded;
   }
 
-  const systemPrompt = `You are a legal analysis assistant for CasePass, supporting solicitors 
-and advocates in England and Wales. You have been given a set of numbered 
-source chunks from the matter file.
+  const { systemPrompt, userMessage } = buildChatPromptParts(question, relevantChunks, handoffContext);
+  const answer = await callClaude(handoffId, systemPrompt, userMessage, 650);
 
-STRICT RULES:
-1. Answer only using information present in the provided source chunks.
-2. For every factual statement, cite the source inline using this exact 
-   format: [Doc: {doc_name}, p.{page}]
-3. If the answer cannot be found in the chunks, respond exactly with:
-   "Insufficient evidence in the file to answer this question."
-4. Never infer, extrapolate, or add legal knowledge not present in the chunks.
-5. Do not refer to yourself or explain your reasoning process.
-6. Use formal English legal register. Use: solicitor, counsel, claimant, 
-   defendant, proceedings, hearing, order. Avoid: attorney, lawsuit, posture.`;
-  const parties = handoffContext.parties || `${handoffContext.client_name || ''} v ${handoffContext.opponent_name || ''}`.trim();
-  const userMessage = `Matter: ${handoffContext.case_name || handoffContext.name || 'Unknown matter'} | Court: ${handoffContext.court || handoffContext.court_or_tribunal || 'Unknown court'} | Parties: ${parties}
+  return finaliseChatAnswer(question, answer, relevantChunks);
+}
 
-SOURCE CHUNKS:
-${buildChunkBlock(relevantChunks)}
+async function streamChatWithSources(question, chunks, handoffContext = {}, onToken = () => {}) {
+  const relevantChunks = ensureRelevantChunks(chunks);
+  const handoffId = resolveHandoffId(handoffContext);
 
-QUESTION: ${question}`;
-  const answer = await callClaude(handoffId, systemPrompt, userMessage, 1000);
-
-  if (answer === 'Insufficient evidence in the file to answer this question.') {
-    return buildGroundedChatAnswer(question, relevantChunks);
+  if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
+    const response = await chatWithSources(question, relevantChunks, handoffContext);
+    onToken(response.answer);
+    return response;
   }
 
-  if (/thinking process/i.test(answer) || extractDocCitations(answer).length === 0) {
-    return buildGroundedChatAnswer(question, relevantChunks);
-  }
-
-  const sources = mapCitationsToSources([answer], relevantChunks);
-  return { answer, sources };
+  const { systemPrompt, userMessage } = buildChatPromptParts(question, relevantChunks, handoffContext);
+  const answer = await callClaudeStream(handoffId, systemPrompt, userMessage, 650, {}, onToken);
+  return finaliseChatAnswer(question, answer, relevantChunks);
 }
 
 async function reviewMatter(handoffId, chunks, handoffData) {
   const relevantChunks = ensureRelevantChunks(chunks);
   if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
-    const firstChunk = relevantChunks[0];
-    const secondChunk = relevantChunks[1] || firstChunk;
-    const response = {
-      stage_of_proceedings: localFactFromChunk(firstChunk),
-      most_recent_operative_event: findChunkSentence(firstChunk, /most recent operative event|order dated|latest/i, localFactFromChunk(firstChunk)),
-      live_deadlines: [
-        findChunkSentence(firstChunk, /live deadline|deadline|due by/i, handoffData.next_hearing_date ? `Next hearing date noted as ${handoffData.next_hearing_date}. [Doc: ${firstChunk.doc_name}, p.${firstChunk.page}]` : 'Not found in file.'),
-      ],
-      urgent_issues: [findChunkSentence(secondChunk, /urgent issue|risk|missing/i, localFactFromChunk(secondChunk))],
-      missing_documents: [],
-      next_procedural_step: findChunkSentence(secondChunk, /next procedural step|next step|prepare|file/i, localFactFromChunk(secondChunk)),
-      sources: mapCitationsToSources([
-        localFactFromChunk(firstChunk),
-        findChunkSentence(firstChunk, /live deadline|deadline|due by/i, localFactFromChunk(firstChunk)),
-        findChunkSentence(secondChunk, /next procedural step|next step|prepare|file/i, localFactFromChunk(secondChunk)),
-      ], relevantChunks),
-    };
+    const response = buildLocalMatterReview(relevantChunks, handoffData);
     localClaudeLog(handoffId, response);
     return response;
   }
@@ -383,7 +795,9 @@ STRICT RULES:
 1. Every field in your output must cite its source: [Doc: {name}, p.{page}]
 2. If a field cannot be determined from the file, write "Not found in file."
 3. Never infer deadlines or dates not explicitly stated in the documents.
-4. Output must be valid JSON only. No preamble, no explanation, no markdown.`;
+4. Summarise each string field in 35 words or fewer. Do not paste raw OCR, form headers, addresses, or whole chunks.
+5. Make stage, event, urgent issues, and next step distinct. Do not repeat the same sentence in multiple fields.
+6. Output must be valid JSON only. No preamble, no explanation, no markdown.`;
   const userMessage = `Matter: ${handoffData.case_name} | Court: ${handoffData.court} | Parties: ${handoffData.parties}
 
 SOURCE CHUNKS:
@@ -401,7 +815,9 @@ Produce a JSON object with exactly these fields:
   "missing_documents": ["string — inferred gap only if explicitly referenced in file but not present"],
   "next_procedural_step": "string with citation",
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
-}`;
+}
+
+/no_think`;
   const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000, { expectJson: true });
 
   try {
@@ -409,11 +825,43 @@ Produce a JSON object with exactly these fields:
     parsed.sources = mapCitationsToSources(collectStrings(parsed), relevantChunks);
     return parsed;
   } catch (_error) {
-    return {
-      error: 'AI review failed to produce valid structured output',
-      raw: responseText,
-    };
+    return buildLocalMatterReview(relevantChunks, handoffData);
   }
+}
+
+function buildLocalMatterReview(relevantChunks, handoffData = {}) {
+  const firstChunk = relevantChunks[0];
+  const secondChunk = relevantChunks[1] || firstChunk;
+  const stage = localFactFromChunk(firstChunk);
+  const deadline =
+    findChunkSentence(firstChunk, /live deadline|deadline|due by|defence due|hearing/i, 'Not found in file.') ||
+    'Not found in file.';
+  const nextStep = findChunkSentence(
+    secondChunk,
+    /next procedural step|next step|prepare|file|serve|proposed directions|directions/i,
+    handoffData.next_hearing_date
+      ? `Prepare for the next hearing on ${handoffData.next_hearing_date}. [Doc: ${firstChunk.doc_name}, p.${firstChunk.page}]`
+      : localFactFromChunk(secondChunk),
+  );
+  const urgentIssue = findChunkSentence(
+    secondChunk,
+    /urgent issue|risk|missing|breach|failure|deadline|due|hearing/i,
+    'Not found in file.',
+  );
+
+  return {
+    stage_of_proceedings: stage,
+    most_recent_operative_event: findChunkSentence(
+      firstChunk,
+      /most recent operative event|order dated|latest|issued|completed|served/i,
+      stage,
+    ),
+    live_deadlines: [deadline],
+    urgent_issues: [urgentIssue],
+    missing_documents: [],
+    next_procedural_step: nextStep,
+    sources: mapCitationsToSources([stage, deadline, urgentIssue, nextStep], relevantChunks),
+  };
 }
 
 async function generateHandoverNote(handoffId, chunks, handoffData, matterReview) {
@@ -445,7 +893,9 @@ STRICT RULES:
 2. Separate file-based facts from strategic notes using clear headings.
 3. Write in formal English legal register.
 4. Do not include information not present in the source chunks.
-5. Output must be valid JSON only. No preamble, no markdown fences.`;
+5. Keep each field concise. Do not paste raw OCR, form headers, addresses, or whole chunks.
+6. Do not duplicate the same source sentence across current_procedural_status, next_required_step, and risk_flags.
+7. Output must be valid JSON only. No preamble, no markdown fences.`;
   const userMessage = `Matter: ${handoffData.case_name} | Court: ${handoffData.court} | Parties: ${handoffData.parties}
 
 Matter review summary:
@@ -465,7 +915,9 @@ Output JSON:
   "file_based_facts": ["string with citation"],
   "strategic_notes": ["string — clearly marked as solicitor instruction, no citation required"],
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
-}`;
+}
+
+/no_think`;
   const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000, { expectJson: true });
 
   try {
@@ -576,6 +1028,7 @@ async function generateCaseSummary(caseData) {
 
 module.exports = {
   chatWithSources,
+  streamChatWithSources,
   reviewMatter,
   generateHandoverNote,
   generateUpdateDraft,
@@ -584,5 +1037,6 @@ module.exports = {
     stripMarkdownFences,
     mapCitationsToSources,
     extractDocCitations,
+    normaliseConversationHistory,
   },
 };

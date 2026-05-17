@@ -1,7 +1,6 @@
 const express = require('express');
-const { query, withTransaction } = require('../db');
+const { query } = require('../db');
 const { logEvent } = require('../services/auditService');
-const { TERMINAL_STATUSES } = require('../services/handoffService');
 
 const router = express.Router();
 
@@ -231,6 +230,7 @@ router.get('/', async (req, res) => {
             LIMIT 1
           ) AS active_handoff_status,
           (SELECT COUNT(*)::int FROM documents d WHERE d.case_id = c.id) AS document_count,
+          COALESCE((SELECT SUM(COALESCE(d.page_count, 0))::int FROM documents d WHERE d.case_id = c.id), 0) AS pages_indexed,
           (SELECT COUNT(*)::int FROM alerts a WHERE a.case_id = c.id AND a.resolved = FALSE) AS alert_count,
           (SELECT COUNT(*)::int FROM checklist_items ci WHERE ci.case_id = c.id) AS checklist_total,
           (SELECT COUNT(*)::int FROM checklist_items ci WHERE ci.case_id = c.id AND ci.completed = TRUE) AS checklist_completed
@@ -366,25 +366,29 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Case not found.' });
     }
 
-    if (caseRow.rows[0].created_by !== req.user.id) {
-      return res.status(403).json({ error: 'Only the case creator may delete this case.' });
-    }
-
-    const activeResult = await query(
+    const accessResult = await query(
       `
-        SELECT id, status
+        SELECT 1
         FROM handoffs
         WHERE case_id = $1
-          AND status NOT IN (${Array.from(TERMINAL_STATUSES).map((_, index) => `$${index + 2}`).join(', ')})
+          AND receiving_solicitor_id = $2
         LIMIT 1
       `,
-      [req.params.id, ...Array.from(TERMINAL_STATUSES)],
+      [req.params.id, req.user.id],
     );
 
-    if (activeResult.rows[0]) {
-      return res.status(409).json({ error: 'This case cannot be deleted while an active handoff still exists.' });
+    const canDelete = req.user.role === 'admin'
+      || caseRow.rows[0].created_by === req.user.id
+      || caseRow.rows[0].solicitor_on_record_id === req.user.id
+      || Boolean(accessResult.rows[0]);
+
+    if (!canDelete) {
+      return res.status(403).json({ error: 'You do not have access to delete this case.' });
     }
 
+    await logEvent('case', req.params.id, 'case_deleted', req.user.id, null, null, {
+      case_title: caseRow.rows[0].case_title,
+    });
     await query('DELETE FROM cases WHERE id = $1', [req.params.id]);
     return res.json({ success: true, id: req.params.id });
   } catch (error) {

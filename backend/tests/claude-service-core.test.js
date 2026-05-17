@@ -6,6 +6,9 @@ describe('claudeService core', () => {
 
   afterEach(() => {
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.AI_API_KEY;
+    delete process.env.AI_BASE_URL;
+    delete process.env.CHAT_MODEL;
     jest.restoreAllMocks();
   });
 
@@ -41,7 +44,7 @@ describe('claudeService core', () => {
     expect(messagesCreate).toHaveBeenCalledWith(expect.objectContaining({
       model: 'claude-sonnet-4-20250514',
       temperature: 0,
-      max_tokens: 1000,
+      max_tokens: 650,
     }));
     expect(result.answer).toContain('[Doc: order.pdf, p.3]');
     expect(result.sources).toEqual([
@@ -188,7 +191,7 @@ describe('claudeService core', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       model: 'Qwen/Qwen3.6-35B-A3B',
       temperature: 0,
-      max_tokens: 1000,
+      max_tokens: 650,
     }));
     expect(result.answer).toContain('[Doc: order.pdf, p.3]');
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[CLAUDE] handoff=handoff-provider'));
@@ -196,6 +199,52 @@ describe('claudeService core', () => {
     delete process.env.AI_API_KEY;
     delete process.env.AI_BASE_URL;
     delete process.env.CHAT_MODEL;
+  });
+
+  test('streamChatWithSources streams OpenAI-compatible deltas and maps final citations', async () => {
+    jest.resetModules();
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.AI_API_KEY = 'provider-key';
+    process.env.AI_BASE_URL = 'https://api.totalgpt.ai';
+    process.env.CHAT_MODEL = 'Qwen-Qwen3.6-35B-A3B';
+
+    async function* responseStream() {
+      yield { choices: [{ delta: { content: 'The next step ' } }] };
+      yield { choices: [{ delta: { content: 'is to file evidence. ' } }] };
+      yield { choices: [{ delta: { content: '[Doc: order.pdf, p.3]' } }] };
+    }
+
+    const create = jest.fn().mockResolvedValue(responseStream());
+
+    jest.doMock('openai', () => ({
+      OpenAI: jest.fn().mockImplementation(() => ({
+        chat: { completions: { create } },
+      })),
+    }));
+    jest.doMock('@anthropic-ai/sdk', () => ({
+      Anthropic: jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })),
+    }));
+
+    const service = require('../src/services/claudeService');
+    const chunks = [{ text: 'File evidence.', doc_name: 'order.pdf', page: 3, chunk_index: 0, score: 0.9 }];
+    const deltas = [];
+
+    const result = await service.streamChatWithSources('What do I do?', chunks, {
+      handoff_id: 'handoff-stream',
+      case_title: 'Provider matter',
+      forum: 'county_court',
+      claimant: 'Claimant Ltd',
+      defendant: 'Defendant Ltd',
+      conversation_history: [{ role: 'assistant', text: 'There is a hearing listed. [Doc: order.pdf, p.3]' }],
+    }, (delta) => deltas.push(delta));
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'Qwen-Qwen3.6-35B-A3B',
+      stream: true,
+      max_tokens: 650,
+    }));
+    expect(deltas.join('')).toBe('The next step is to file evidence. [Doc: order.pdf, p.3]');
+    expect(result.sources[0]).toMatchObject({ doc_name: 'order.pdf', page: 3 });
   });
 
   test('chatWithSources strips qwen think blocks from provider answers', async () => {

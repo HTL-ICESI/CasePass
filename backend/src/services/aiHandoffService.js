@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { searchChunks, getIndexedChunksForHandoff } = require('./ragService');
+const { searchChunks, getIndexedChunksForHandoff, getTopicSearchChunks } = require('./ragService');
 const claudeService = require('./claudeService');
 const { logEvent } = require('./auditService');
 
@@ -39,6 +39,7 @@ async function getHandoffContext(handoffId) {
         h.*, c.case_title, c.claim_number, c.claimant, c.defendant,
         c.claim_type AS matter_type,
         c.forum, c.ruleset, c.court_name,
+        c.next_hearing_date,
         c.most_recent_operative_event,
         c.next_procedural_step
       FROM handoffs h
@@ -55,7 +56,7 @@ async function getHandoffContext(handoffId) {
   const row = result.rows[0];
   return {
     ...row,
-    parties: `${row.client_name} v ${row.opponent_name}`,
+    parties: `${row.claimant || 'Claimant'} v ${row.defendant || 'Defendant'}`,
     court: row.court_name || row.forum,
     next_hearing_date: row.next_hearing_date,
     case_name: row.case_title,
@@ -198,12 +199,20 @@ function buildDeterministicUpdateDraft(postAction, chunks) {
 
 async function reviewMatter(handoffId, actorId = null) {
   const handoff = await getHandoffContext(handoffId);
-  const chunks = await findRelevantChunks(handoffId, [
-    'stage proceedings operative event live deadlines urgent issues next procedural step',
-    handoff.last_known_action,
-    handoff.intended_task,
-    `${handoff.case_name} ${handoff.matter_type} ${handoff.court}`,
-  ]);
+  let chunks = [];
+  try {
+    chunks = await getTopicSearchChunks(handoffId, 8);
+  } catch (_error) {
+    chunks = [];
+  }
+  if (!Array.isArray(chunks) || chunks.length === 0) {
+    chunks = await findRelevantChunks(handoffId, [
+      'stage proceedings operative event live deadlines urgent issues next procedural step',
+      handoff.last_known_action,
+      handoff.intended_task,
+      `${handoff.case_name} ${handoff.matter_type} ${handoff.court}`,
+    ]);
+  }
   const review = await claudeService.reviewMatter(handoffId, chunks, {
     case_name: handoff.case_name,
     matter_type: handoff.matter_type,
@@ -221,12 +230,20 @@ async function reviewMatter(handoffId, actorId = null) {
 async function generateHandoverNote(handoffId, actorId = null) {
   const handoff = await getHandoffContext(handoffId);
   const matterReview = await reviewMatter(handoffId, actorId);
-  const chunks = await findRelevantChunks(handoffId, [
-    `${handoff.intended_task} ${handoff.case_name}`,
-    matterReview.most_recent_operative_event,
-    matterReview.next_procedural_step,
-    ...(matterReview.live_deadlines || []),
-  ]);
+  let chunks = [];
+  try {
+    chunks = await getTopicSearchChunks(handoffId, 12);
+  } catch (_error) {
+    chunks = [];
+  }
+  if (!Array.isArray(chunks) || chunks.length === 0) {
+    chunks = await findRelevantChunks(handoffId, [
+      `${handoff.intended_task} ${handoff.case_name}`,
+      matterReview.most_recent_operative_event,
+      matterReview.next_procedural_step,
+      ...(matterReview.live_deadlines || []),
+    ]);
+  }
   let note;
 
   try {

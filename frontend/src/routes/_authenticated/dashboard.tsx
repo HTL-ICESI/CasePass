@@ -1,9 +1,21 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Search, Filter, FileText, Calendar, Inbox, Layers } from "lucide-react";
+import { Search, Filter, FileText, Calendar, Inbox, Layers, Trash2, Loader2 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -14,12 +26,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth, ROLE_LABEL } from "@/lib/auth";
 import { api } from "@/lib/api";
-import type {
-  Handoff,
-  ListHandoffsParams,
-  MatterStatus,
-  MatterType,
-} from "@/lib/api";
+import type { Handoff, ListHandoffsParams, MatterStatus, MatterType } from "@/lib/api";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — CasePass" }] }),
@@ -47,6 +55,7 @@ const TYPE_OPTIONS: Array<{ value: MatterType | "all"; label: string }> = [
 
 function DashboardPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<MatterStatus | "all">("all");
   const [type, setType] = useState<MatterType | "all">("all");
@@ -73,6 +82,20 @@ function DashboardPage() {
       }),
     enabled: !!user,
     staleTime: 15_000,
+  });
+
+  const deleteCase = useMutation({
+    mutationFn: (caseId: string) => api.deleteCase(caseId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["handoffs"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-kpis"] }),
+        queryClient.invalidateQueries({ queryKey: ["inbox"] }),
+      ]);
+      toast.success("Case deleted.");
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not delete case."),
   });
 
   if (!user) return null;
@@ -145,7 +168,9 @@ function DashboardPage() {
               </SelectTrigger>
               <SelectContent>
                 {STATUS_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -155,7 +180,9 @@ function DashboardPage() {
               </SelectTrigger>
               <SelectContent>
                 {TYPE_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -166,6 +193,8 @@ function DashboardPage() {
           loading={list.isLoading}
           handoffs={list.data ?? []}
           empty={!list.isLoading && (list.data?.length ?? 0) === 0}
+          deletingCaseId={deleteCase.variables}
+          onDelete={(caseId) => deleteCase.mutate(caseId)}
         />
       </section>
     </div>
@@ -217,10 +246,14 @@ function MattersTable({
   loading,
   handoffs,
   empty,
+  deletingCaseId,
+  onDelete,
 }: {
   loading: boolean;
   handoffs: Handoff[];
   empty: boolean;
+  deletingCaseId?: string;
+  onDelete: (caseId: string) => void;
 }) {
   if (loading) {
     return (
@@ -254,6 +287,7 @@ function MattersTable({
             <th className="px-3 py-3 font-medium">Status</th>
             <th className="px-3 py-3 font-medium">Next hearing</th>
             <th className="px-5 py-3 text-right font-medium">Indexed</th>
+            <th className="px-5 py-3 text-right font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -263,11 +297,7 @@ function MattersTable({
               className="group border-b border-border/50 last:border-b-0 transition-colors hover:bg-muted/40"
             >
               <td className="px-5 py-4">
-                <Link
-                  to="/handoffs/$id"
-                  params={{ id: h.id }}
-                  className="block"
-                >
+                <Link to="/handoffs/$id" params={{ id: h.id }} className="block">
                   <p className="font-display text-sm font-semibold text-foreground group-hover:text-indigo">
                     {h.caseName}
                   </p>
@@ -279,12 +309,21 @@ function MattersTable({
               </td>
               <td className="px-3 py-4 text-xs text-muted-foreground">{h.matterType}</td>
               <td className="px-3 py-4 text-xs text-muted-foreground">{h.court}</td>
-              <td className="px-3 py-4"><StatusChip status={h.status} /></td>
+              <td className="px-3 py-4">
+                <StatusChip status={h.status} />
+              </td>
               <td className="px-3 py-4 text-xs text-foreground">
                 {h.nextHearingAt ? formatDate(h.nextHearingAt) : "—"}
               </td>
               <td className="px-5 py-4 text-right font-mono text-[11px] text-muted-foreground">
                 {h.documentsCount} docs · {h.pagesIndexed} p
+              </td>
+              <td className="px-5 py-4 text-right">
+                <DeleteCaseButton
+                  handoff={h}
+                  deleting={deletingCaseId === h.caseId}
+                  onDelete={() => onDelete(h.caseId)}
+                />
               </td>
             </tr>
           ))}
@@ -294,13 +333,58 @@ function MattersTable({
   );
 }
 
+function DeleteCaseButton({
+  handoff,
+  deleting,
+  onDelete,
+}: {
+  handoff: Handoff;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+          aria-label={`Delete ${handoff.caseName}`}
+          disabled={deleting}
+        >
+          {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this case?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes “{handoff.caseName}” from CasePass, including its handoffs, documents,
+            notes, updates, and indexed sources.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={onDelete}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            Delete case
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function StatusChip({ status }: { status: MatterStatus }) {
   const map: Record<MatterStatus, { label: string; cls: string; pulse?: boolean }> = {
-    "intake": { label: "Intake", cls: "bg-muted text-foreground" },
-    "indexed": { label: "Indexed", cls: "bg-indigo-soft text-onyx" },
+    intake: { label: "Intake", cls: "bg-muted text-foreground" },
+    indexed: { label: "Indexed", cls: "bg-indigo-soft text-onyx" },
     "handoff-active": { label: "Handoff active", cls: "bg-mint-soft text-onyx", pulse: true },
     "in-review": { label: "In review", cls: "bg-indigo-soft text-onyx" },
-    "closed": { label: "Closed", cls: "bg-muted text-muted-foreground" },
+    closed: { label: "Closed", cls: "bg-muted text-muted-foreground" },
   };
   const m = map[status];
   return (
@@ -320,5 +404,3 @@ function formatDate(iso: string) {
   const d = new Date(iso);
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
-
-

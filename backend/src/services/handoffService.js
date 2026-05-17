@@ -20,6 +20,7 @@ const HEARING_NOTE_TYPES = {
   official_transcript_import: 'transcript',
 };
 const TERMINAL_STATUSES = new Set(['clearance_failed', 'completed', 'escalated']);
+const SENDER_EDIT_STATUSES = new Set(['clearance_pending', 'file_upload_open', 'pack_building', 'pack_review']);
 const CIVIL_FORUMS = new Set([
   'county_court',
   'high_court_kbd',
@@ -120,6 +121,28 @@ function assertReadable(handoff, actorId, role = 'user') {
   }
 }
 
+async function assertValidRecipient(client, recipientId, actorId) {
+  if (recipientId === actorId) {
+    throw createHandoffError('Choose a different receiving solicitor.', 'VALIDATION_ERROR', 422, {
+      field_errors: { receiving_solicitor_id: 'Receiving solicitor must be another active user.' },
+    });
+  }
+
+  const recipientResult = await client.query(
+    'SELECT id, name, active, role FROM users WHERE id = $1',
+    [recipientId],
+  );
+  const recipient = recipientResult.rows[0];
+
+  if (!recipient || !recipient.active || recipient.role === 'admin') {
+    throw createHandoffError('Invalid recipient.', 'VALIDATION_ERROR', 422, {
+      field_errors: { receiving_solicitor_id: 'Recipient is not an active non-admin user.' },
+    });
+  }
+
+  return recipient;
+}
+
 async function changeStatus(client, handoff, nextStatus, actorId, eventType, metadata = {}) {
   await assertValidTransition(handoff.status, nextStatus, {
     entityId: handoff.id,
@@ -189,6 +212,7 @@ async function createHandoff(senderId, caseId, metadata) {
 
   return withTransaction(async (client) => {
     const caseRow = await assertCaseOwnerOrSolicitor(caseId, senderId, client);
+    await assertValidRecipient(client, metadata.receiving_solicitor_id, senderId);
     const result = await client.query(
       `
         INSERT INTO handoffs (
@@ -210,6 +234,52 @@ async function createHandoff(senderId, caseId, metadata) {
       case_title: caseRow.case_title,
     });
     return clearancePending;
+  });
+}
+
+async function setRecipient(handoffId, newRecipientId, actorId) {
+  return withTransaction(async (client) => {
+    const handoff = await getHandoffRow(handoffId, client);
+    assertSenderActor(handoff, actorId);
+
+    if (!['draft', ...SENDER_EDIT_STATUSES].includes(handoff.status)) {
+      throw createHandoffError(
+        'Recipient can only be changed before the pack is released.',
+        'INVALID_TRANSITION',
+        409,
+        {
+          current_status: handoff.status,
+          attempted_status: handoff.status,
+          allowed_next: ['draft', ...SENDER_EDIT_STATUSES],
+        },
+      );
+    }
+
+    await assertValidRecipient(client, newRecipientId, actorId);
+
+    const result = await client.query(
+      `
+        UPDATE handoffs
+        SET receiving_solicitor_id = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [handoffId, newRecipientId],
+    );
+
+    await logEvent(
+      'handoff',
+      handoffId,
+      'handoff_recipient_changed',
+      actorId,
+      handoff.status,
+      handoff.status,
+      { receiving_solicitor_id: newRecipientId },
+      client,
+    );
+
+    return result.rows[0];
   });
 }
 
@@ -355,8 +425,8 @@ async function addHandoffDocument(handoffId, actorId, filePayload, metadata) {
     const handoff = await getHandoffRow(handoffId, client);
     assertSenderActor(handoff, actorId);
 
-    if (handoff.status !== 'file_upload_open') {
-      throw createHandoffError('Document upload is not permitted at this stage. Files can only be uploaded after recipient clearance is approved.', 'HANDOFF_UPLOAD_BLOCKED', 403, {
+    if (!['clearance_pending', 'file_upload_open'].includes(handoff.status)) {
+      throw createHandoffError('Document upload is not permitted at this stage. Files can only be uploaded while clearance is pending or after recipient clearance is approved.', 'HANDOFF_UPLOAD_BLOCKED', 403, {
         current_status: handoff.status,
         error_code: 'CLEARANCE_GATE_BLOCKED',
       });
@@ -432,6 +502,44 @@ async function getDocumentMap(handoffId, actorId, role = 'user', client = null) 
   );
 
   return result.rows;
+}
+
+async function deleteHandoffDocument(handoffId, docId, actorId) {
+  return withTransaction(async (client) => {
+    const handoff = await getHandoffRow(handoffId, client);
+    assertSenderActor(handoff, actorId);
+
+    if (!SENDER_EDIT_STATUSES.has(handoff.status)) {
+      throw createHandoffError('Documents can only be removed before the pack is released.', 'HANDOFF_DELETE_BLOCKED', 403, {
+        current_status: handoff.status,
+        error_code: 'EDIT_WINDOW_CLOSED',
+      });
+    }
+
+    const docResult = await client.query(
+      'SELECT id, original_name, filename FROM documents WHERE id = $1 AND handoff_id = $2',
+      [docId, handoffId],
+    );
+    const doc = docResult.rows[0];
+    if (!doc) {
+      throw createHandoffError('Document not found for this handoff.', 'DOCUMENT_NOT_FOUND', 404);
+    }
+
+    await client.query('DELETE FROM documents WHERE id = $1', [docId]);
+
+    await logEvent(
+      'handoff',
+      handoffId,
+      'handoff_document_deleted',
+      actorId,
+      handoff.status,
+      handoff.status,
+      { document_id: docId, original_name: doc.original_name },
+      client,
+    );
+
+    return doc;
+  });
 }
 
 async function beginPackBuilding(handoffId, actorId) {
@@ -839,6 +947,16 @@ async function getFullHandoffState(handoffId, actorId, role = 'user') {
   const caseResult = await query('SELECT * FROM cases WHERE id = $1', [handoff.case_id]);
   const notesResult = await query('SELECT * FROM handover_notes WHERE handoff_id = $1 ORDER BY version_number ASC, created_at ASC', [handoffId]);
   const updatesResult = await query('SELECT * FROM post_action_updates WHERE handoff_id = $1 ORDER BY created_at ASC', [handoffId]);
+  const documentStatsResult = await query(
+    `
+      SELECT
+        COUNT(*)::int AS document_count,
+        COALESCE(SUM(COALESCE(page_count, 0))::int, 0) AS pages_indexed
+      FROM documents
+      WHERE handoff_id = $1
+    `,
+    [handoffId],
+  );
   const documents = await getDocumentMap(handoffId, actorId, role).catch((error) => {
     if (error.statusCode === 403) {
       return [];
@@ -848,6 +966,8 @@ async function getFullHandoffState(handoffId, actorId, role = 'user') {
 
   return {
     ...handoff,
+    document_count: documentStatsResult.rows[0]?.document_count || 0,
+    pages_indexed: documentStatsResult.rows[0]?.pages_indexed || 0,
     case_summary: caseResult.rows[0] || null,
     handover_notes: notesResult.rows.map((row) => ({
       ...row,
@@ -886,7 +1006,9 @@ async function listCaseHandoffs(caseId, actorId, role = 'user') {
       SELECT
         h.*,
         sender.name AS sending_solicitor_name,
-        receiver.name AS receiving_solicitor_name
+        receiver.name AS receiving_solicitor_name,
+        (SELECT COUNT(*)::int FROM documents d WHERE d.handoff_id = h.id) AS document_count,
+        COALESCE((SELECT SUM(COALESCE(d.page_count, 0))::int FROM documents d WHERE d.handoff_id = h.id), 0) AS pages_indexed
       FROM handoffs h
       INNER JOIN users sender ON sender.id = h.sending_solicitor_id
       LEFT JOIN users receiver ON receiver.id = h.receiving_solicitor_id
@@ -935,6 +1057,7 @@ async function listPostActionUpdates(handoffId, actorId, role = 'user') {
 module.exports = {
   createHandoff,
   submitClearance,
+  setRecipient,
   setRepresentationType,
   releaseHandoverPack,
   acceptHandoff,
@@ -943,6 +1066,7 @@ module.exports = {
   clearComplianceHold,
   addHandoffDocument,
   getDocumentMap,
+  deleteHandoffDocument,
   beginPackBuilding,
   approveHandoverNote,
   updateTaskStatus,
