@@ -92,7 +92,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const { pool } = require('../src/db');
+  let pool;
+  try {
+    ({ pool } = require('../src/db'));
+  } catch (_error) {
+    pool = null;
+  }
   const client = new Client({ connectionString: process.env.DATABASE_URL_TEST });
   await client.connect();
   try {
@@ -101,5 +106,7 @@ afterAll(async () => {
   } finally {
     await client.end();
   }
-  await pool.end();
+  if (pool && typeof pool.end === 'function') {
+    await pool.end();
+  }
 });

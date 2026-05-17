@@ -5,9 +5,22 @@ const { OpenAI } = require('openai');
 const { ChromaClient } = require('chromadb');
 const { query } = require('../db');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'missing-openai-key' });
+function normaliseBaseUrl(url) {
+  if (!url) {
+    return undefined;
+  }
+
+  const trimmed = url.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+const openAiApiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || 'missing-openai-key';
+const openAiBaseUrl = normaliseBaseUrl(process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL);
+const embeddingModel = process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
+const openai = new OpenAI({ apiKey: openAiApiKey, baseURL: openAiBaseUrl });
 const chroma = new ChromaClient({ path: process.env.CHROMA_URL || 'http://localhost:8000' });
-const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY) && process.env.OPENAI_API_KEY !== 'sk-test';
+const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY || process.env.AI_API_KEY)
+  && openAiApiKey !== 'sk-test';
 const fallbackCollections = new Map();
 
 function createRagError(message, code, cause) {
@@ -314,7 +327,7 @@ async function indexDocument(handoffId, docId, docName, pdfBuffer) {
 
     for (const chunk of chunks) {
       const response = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
+        model: embeddingModel,
         input: chunk.text,
       });
 
@@ -375,7 +388,7 @@ async function searchChunks(queryText, handoffId, topK = 5) {
     }
 
     const embeddingResponse = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
+      model: embeddingModel,
       input: queryText,
     });
 

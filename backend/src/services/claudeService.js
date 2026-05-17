@@ -1,8 +1,26 @@
 const { Anthropic } = require('@anthropic-ai/sdk');
+const { OpenAI } = require('openai');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || 'missing-anthropic-key' });
 const MODEL = 'claude-sonnet-4-20250514';
 const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY) && process.env.ANTHROPIC_API_KEY !== 'sk-ant-test';
+
+function normaliseBaseUrl(url) {
+  if (!url) {
+    return undefined;
+  }
+
+  const trimmed = url.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+const openAiCompatibleApiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || 'missing-provider-key';
+const openAiCompatibleBaseUrl = normaliseBaseUrl(process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL);
+const chatModel = process.env.CHAT_MODEL || MODEL;
+const hasOpenAiCompatibleChat = Boolean(process.env.AI_API_KEY && process.env.AI_BASE_URL && process.env.CHAT_MODEL);
+const openAiCompatibleClient = hasOpenAiCompatibleChat
+  ? new OpenAI({ apiKey: openAiCompatibleApiKey, baseURL: openAiCompatibleBaseUrl })
+  : null;
 
 function createClaudeError(message, code, cause) {
   const error = Object.assign(new Error(message), { code });
@@ -17,7 +35,9 @@ function estimateTokenCount(text) {
 }
 
 function stripMarkdownFences(text) {
-  const trimmed = String(text || '').trim();
+  const trimmed = String(text || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim();
 
   if (!trimmed.startsWith('```')) {
     return trimmed;
@@ -26,6 +46,12 @@ function stripMarkdownFences(text) {
   return trimmed
     .replace(/^```[a-zA-Z0-9_-]*\s*/, '')
     .replace(/```$/, '')
+    .trim();
+}
+
+function stripReasoningBlocks(text) {
+  return String(text || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .trim();
 }
 
@@ -131,8 +157,32 @@ function parseStructuredJson(responseText) {
   return JSON.parse(stripMarkdownFences(responseText));
 }
 
-async function callClaude(handoffId, system, userMessage, maxTokens) {
+async function callClaude(handoffId, system, userMessage, maxTokens, options = {}) {
   const startedAt = Date.now();
+
+  if (hasOpenAiCompatibleChat && openAiCompatibleClient) {
+    try {
+      const response = await openAiCompatibleClient.chat.completions.create({
+        model: chatModel,
+        temperature: 0,
+        max_tokens: maxTokens,
+        ...(options.expectJson ? { response_format: { type: 'json_object' } } : {}),
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userMessage },
+        ],
+      });
+
+      const content = stripReasoningBlocks(response.choices?.[0]?.message?.content || '');
+      const latency = Date.now() - startedAt;
+      const inputTokens = response.usage?.prompt_tokens ?? estimateTokenCount(`${system}\n${userMessage}`);
+      const outputTokens = response.usage?.completion_tokens ?? estimateTokenCount(content);
+      console.log(`[CLAUDE] handoff=${handoffId} tokens_in=${inputTokens} tokens_out=${outputTokens} latency=${latency}ms`);
+      return String(content).trim();
+    } catch (error) {
+      throw createClaudeError(error.message || 'OpenAI-compatible chat request failed.', error.code || 'CLAUDE_REQUEST_FAILED', error);
+    }
+  }
 
   if (!hasAnthropicKey) {
     const latency = Date.now() - startedAt;
@@ -193,7 +243,7 @@ function localClaudeLog(handoffId, payload) {
 async function chatWithSources(question, chunks, handoffContext = {}) {
   const relevantChunks = ensureRelevantChunks(chunks);
   const handoffId = resolveHandoffId(handoffContext);
-  if (!hasAnthropicKey) {
+  if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
     const hasDirectMatch = relevantChunks.some((chunk) => question.toLowerCase().split(/\s+/).some((term) => term.length > 3 && chunk.text.toLowerCase().includes(term.toLowerCase())));
 
     if (!hasDirectMatch) {
@@ -246,7 +296,7 @@ QUESTION: ${question}`;
 
 async function reviewMatter(handoffId, chunks, handoffData) {
   const relevantChunks = ensureRelevantChunks(chunks);
-  if (!hasAnthropicKey) {
+  if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
     const firstChunk = relevantChunks[0];
     const secondChunk = relevantChunks[1] || firstChunk;
     const response = {
@@ -294,7 +344,7 @@ Produce a JSON object with exactly these fields:
   "next_procedural_step": "string with citation",
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
 }`;
-  const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000);
+  const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000, { expectJson: true });
 
   try {
     const parsed = parseStructuredJson(responseText);
@@ -310,7 +360,7 @@ Produce a JSON object with exactly these fields:
 
 async function generateHandoverNote(handoffId, chunks, handoffData, matterReview) {
   const relevantChunks = ensureRelevantChunks(chunks);
-  if (!hasAnthropicKey) {
+  if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
     const firstChunk = relevantChunks[0];
     const secondChunk = relevantChunks[1] || firstChunk;
     const response = {
@@ -358,7 +408,7 @@ Output JSON:
   "strategic_notes": ["string — clearly marked as solicitor instruction, no citation required"],
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
 }`;
-  const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000);
+  const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000, { expectJson: true });
 
   try {
     const parsed = parseStructuredJson(responseText);
@@ -371,7 +421,7 @@ Output JSON:
 
 async function generateUpdateDraft(handoffId, chunks, postActionData) {
   const relevantChunks = ensureRelevantChunks(chunks);
-  if (!hasAnthropicKey) {
+  if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
     const firstChunk = relevantChunks[0];
     const secondChunk = relevantChunks[1] || firstChunk;
     const response = {
@@ -408,7 +458,7 @@ Output JSON:
   "updated_deadlines": ["string with citation"],
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
 }`;
-  const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000);
+  const responseText = await callClaude(handoffId, systemPrompt, userMessage, 2000, { expectJson: true });
 
   try {
     const parsed = parseStructuredJson(responseText);
