@@ -5,6 +5,7 @@ import { ArrowLeft, Calendar, Gavel, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MatterStatus } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/app/error-state";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id")({
   head: ({ params }) => ({
@@ -19,6 +20,8 @@ const TABS: Array<{ to: string; label: string; exact?: boolean }> = [
   { to: "/handoffs/$id/note", label: "Handover note" },
   { to: "/handoffs/$id/updates", label: "Updates" },
   { to: "/handoffs/$id/sources", label: "Sources" },
+  { to: "/handoffs/$id/activity", label: "Activity" },
+  { to: "/handoffs/$id/export", label: "Export" },
 ];
 
 function MatterLayout() {
@@ -33,23 +36,26 @@ function MatterLayout() {
   });
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <Link
         to="/dashboard"
-        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        className="cp-no-print inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft className="h-3.5 w-3.5" /> All matters
       </Link>
 
-      <header className="mt-4 rounded-2xl border border-border bg-surface p-6 shadow-[var(--shadow-1)]">
-        {isLoading || !data ? (
+      <header className="cp-no-print mt-4 rounded-2xl border border-border bg-surface p-6 shadow-[var(--shadow-1)]">
+        {isError ? (
+          <ErrorState
+            title="Matter not available"
+            description="It may have been moved or you may not have access. Head back to the dashboard."
+          />
+        ) : isLoading || !data ? (
           <div className="space-y-3">
             <Skeleton className="h-4 w-32" />
             <Skeleton className="h-8 w-2/3" />
             <Skeleton className="h-4 w-1/2" />
           </div>
-        ) : isError ? (
-          <p className="text-sm text-destructive">Matter not found.</p>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2">
@@ -84,18 +90,20 @@ function MatterLayout() {
         )}
       </header>
 
-      <nav className="mt-6 flex flex-wrap items-center gap-1 border-b border-border">
-        {TABS.map((t) => (
-          <Link
-            key={t.to}
-            to={t.to}
-            params={{ id }}
-            activeOptions={{ exact: t.exact ?? false }}
-            className="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground data-[status=active]:border-indigo data-[status=active]:text-foreground data-[status=active]:font-medium"
-          >
-            {t.label}
-          </Link>
-        ))}
+      <nav className="cp-no-print mt-6 -mx-4 overflow-x-auto border-b border-border px-4 sm:mx-0 sm:px-0">
+        <div className="flex min-w-max items-center gap-1">
+          {TABS.map((t) => (
+            <Link
+              key={t.to}
+              to={t.to}
+              params={{ id }}
+              activeOptions={{ exact: t.exact ?? false }}
+              className="-mb-px shrink-0 border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground data-[status=active]:border-indigo data-[status=active]:text-foreground data-[status=active]:font-medium"
+            >
+              {t.label}
+            </Link>
+          ))}
+        </div>
       </nav>
 
       <div className="mt-6">

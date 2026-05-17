@@ -33,7 +33,7 @@ function AdminHome() {
   const receivers = MOCK_USERS.filter((u) => u.role === "receiving").length;
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-10">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
       <header>
         <p className="font-mono text-xs uppercase tracking-[0.18em] text-indigo">Admin</p>
         <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight md:text-4xl">

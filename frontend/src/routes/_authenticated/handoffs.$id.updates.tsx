@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CitationChip } from "@/components/app/citation-chip";
+import { EmptyState } from "@/components/app/empty-state";
+import { ErrorState } from "@/components/app/error-state";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/updates")({
   head: () => ({ meta: [{ title: "Updates — CasePass" }] }),
@@ -24,10 +26,11 @@ function UpdatesPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const { data: updates, isLoading } = useQuery({
+  const updatesQuery = useQuery({
     queryKey: ["matter-updates", id],
     queryFn: () => api.listUpdates(id),
   });
+  const { data: updates, isLoading, isError } = updatesQuery;
 
   const [whatWasDone, setWhatWasDone] = useState("");
   const [whatHappened, setWhatHappened] = useState("");
@@ -94,6 +97,11 @@ function UpdatesPage() {
             <Skeleton className="h-32 w-full" />
             <Skeleton className="h-32 w-full" />
           </div>
+        ) : isError ? (
+          <ErrorState
+            title="We couldn't load the timeline"
+            onRetry={() => updatesQuery.refetch()}
+          />
         ) : updates && updates.length > 0 ? (
           <ol className="relative space-y-5 before:absolute before:left-[15px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-border">
             {updates.map((u) => (
@@ -101,13 +109,12 @@ function UpdatesPage() {
             ))}
           </ol>
         ) : (
-          <div className="rounded-2xl border border-dashed border-border bg-surface px-8 py-14 text-center">
-            <CheckCircle2 className="mx-auto h-6 w-6 text-muted-foreground" />
-            <p className="mt-3 text-sm font-medium text-foreground">No updates yet</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Log the first post-action update using the form on the right.
-            </p>
-          </div>
+          <EmptyState
+            icon={<CheckCircle2 className="h-5 w-5" />}
+            tone="mint"
+            title="No updates yet"
+            description="Log the first post-action update using the form on the right."
+          />
         )}
       </section>
 

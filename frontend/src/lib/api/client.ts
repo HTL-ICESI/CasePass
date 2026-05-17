@@ -1,4 +1,6 @@
 import type {
+  ActivityEvent,
+  ActivityKind,
   ChatAnswer,
   Chunk,
   CreateHandoffInput,
@@ -23,4 +25,13 @@ export interface CasePassClient {
   chatWithSources(handoffId: string, question: string): Promise<ChatAnswer>;
   listUpdates(handoffId: string): Promise<MatterUpdate[]>;
   createUpdate(input: CreateUpdateInput): Promise<MatterUpdate>;
+  listActivity(handoffId: string): Promise<ActivityEvent[]>;
+  logActivity(input: {
+    matterId: string;
+    kind: ActivityKind;
+    actorName: string;
+    actorRole?: ActivityEvent["actorRole"];
+    summary: string;
+    meta?: Record<string, string | number>;
+  }): Promise<ActivityEvent>;
 }

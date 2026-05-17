@@ -148,3 +148,25 @@ export type DashboardKpis = {
   pendingHandoffs: number;
   pagesIndexed: number;
 };
+
+export type ActivityKind =
+  | "matter.created"
+  | "matter.indexed"
+  | "document.uploaded"
+  | "handoff.accepted"
+  | "update.posted"
+  | "chat.asked"
+  | "citation.copied"
+  | "export.generated"
+  | "note.saved";
+
+export type ActivityEvent = {
+  id: string;
+  matterId: string;
+  kind: ActivityKind;
+  at: string;
+  actorName: string;
+  actorRole?: "Solicitor" | "Receiving counsel" | "Firm admin" | "System";
+  summary: string;
+  meta?: Record<string, string | number>;
+};

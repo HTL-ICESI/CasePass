@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Search, Filter, FileText, Calendar, Inbox, Layers } from "lucide-react";
+import { Search, Filter, FileText, Calendar, Inbox, Layers, Plus, FolderOpen } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import {
@@ -12,6 +12,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/app/empty-state";
+import { ErrorState } from "@/components/app/error-state";
 import { useAuth, ROLE_LABEL } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type {
@@ -78,7 +81,7 @@ function DashboardPage() {
   if (!user) return null;
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-10">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-indigo">
@@ -165,7 +168,11 @@ function DashboardPage() {
         <MattersTable
           loading={list.isLoading}
           handoffs={list.data ?? []}
-          empty={!list.isLoading && (list.data?.length ?? 0) === 0}
+          empty={!list.isLoading && !list.isError && (list.data?.length ?? 0) === 0}
+          isError={list.isError}
+          onRetry={() => list.refetch()}
+          hasFilters={!!search || status !== "all" || type !== "all"}
+          canCreate={user.role !== "receiving"}
         />
       </section>
     </div>
@@ -217,10 +224,18 @@ function MattersTable({
   loading,
   handoffs,
   empty,
+  isError,
+  onRetry,
+  hasFilters,
+  canCreate,
 }: {
   loading: boolean;
   handoffs: Handoff[];
   empty: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  hasFilters: boolean;
+  canCreate: boolean;
 }) {
   if (loading) {
     return (
@@ -232,13 +247,40 @@ function MattersTable({
     );
   }
 
+  if (isError) {
+    return (
+      <div className="p-4">
+        <ErrorState
+          title="We couldn't load your matters"
+          description="The request failed. Try again — your filters are kept."
+          onRetry={onRetry}
+        />
+      </div>
+    );
+  }
+
   if (empty) {
     return (
-      <div className="px-6 py-16 text-center">
-        <h3 className="font-display text-lg font-semibold">No matters match those filters</h3>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Clear the search or pick a broader status to see more.
-        </p>
+      <div className="p-4">
+        <EmptyState
+          icon={<FolderOpen className="h-5 w-5" />}
+          tone="indigo"
+          title={hasFilters ? "No matters match those filters" : "No matters yet"}
+          description={
+            hasFilters
+              ? "Clear the search or pick a broader status to see more."
+              : "Create your first handoff to start indexing the case file."
+          }
+          action={
+            canCreate && !hasFilters ? (
+              <Button asChild size="sm">
+                <Link to="/handoffs/new">
+                  <Plus className="mr-1.5 h-4 w-4" /> New handoff
+                </Link>
+              </Button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }

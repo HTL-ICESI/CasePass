@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Calendar, FileMinus, Compass, Activity } from "lucide-react";
+import { AlertTriangle, Calendar, FileMinus, Compass, Activity, Package, ArrowRight } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { CitationChip } from "@/components/app/citation-chip";
@@ -130,6 +130,21 @@ function OverviewPage() {
             </ul>
           )}
         </Section>
+
+        <Link
+          to="/handoffs/$id/export"
+          params={{ id }}
+          className="group flex items-center gap-3 rounded-2xl border border-indigo/30 bg-indigo-soft/40 p-4 transition-colors hover:bg-indigo-soft/70"
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-md bg-indigo text-white">
+            <Package className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground">Export handoff package</p>
+            <p className="text-xs text-muted-foreground">Brief + sources + updates as PDF</p>
+          </div>
+          <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        </Link>
       </aside>
     </div>
   );

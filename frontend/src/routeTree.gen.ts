@@ -23,7 +23,9 @@ import { Route as AuthenticatedHandoffsIdIndexRouteImport } from './routes/_auth
 import { Route as AuthenticatedHandoffsIdUpdatesRouteImport } from './routes/_authenticated/handoffs.$id.updates'
 import { Route as AuthenticatedHandoffsIdSourcesRouteImport } from './routes/_authenticated/handoffs.$id.sources'
 import { Route as AuthenticatedHandoffsIdNoteRouteImport } from './routes/_authenticated/handoffs.$id.note'
+import { Route as AuthenticatedHandoffsIdExportRouteImport } from './routes/_authenticated/handoffs.$id.export'
 import { Route as AuthenticatedHandoffsIdChatRouteImport } from './routes/_authenticated/handoffs.$id.chat'
+import { Route as AuthenticatedHandoffsIdActivityRouteImport } from './routes/_authenticated/handoffs.$id.activity'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -99,10 +101,22 @@ const AuthenticatedHandoffsIdNoteRoute =
     path: '/note',
     getParentRoute: () => AuthenticatedHandoffsIdRoute,
   } as any)
+const AuthenticatedHandoffsIdExportRoute =
+  AuthenticatedHandoffsIdExportRouteImport.update({
+    id: '/export',
+    path: '/export',
+    getParentRoute: () => AuthenticatedHandoffsIdRoute,
+  } as any)
 const AuthenticatedHandoffsIdChatRoute =
   AuthenticatedHandoffsIdChatRouteImport.update({
     id: '/chat',
     path: '/chat',
+    getParentRoute: () => AuthenticatedHandoffsIdRoute,
+  } as any)
+const AuthenticatedHandoffsIdActivityRoute =
+  AuthenticatedHandoffsIdActivityRouteImport.update({
+    id: '/activity',
+    path: '/activity',
     getParentRoute: () => AuthenticatedHandoffsIdRoute,
   } as any)
 
@@ -116,7 +130,9 @@ export interface FileRoutesByFullPath {
   '/handoffs/$id': typeof AuthenticatedHandoffsIdRouteWithChildren
   '/handoffs/new': typeof AuthenticatedHandoffsNewRoute
   '/admin/': typeof AuthenticatedAdminIndexRoute
+  '/handoffs/$id/activity': typeof AuthenticatedHandoffsIdActivityRoute
   '/handoffs/$id/chat': typeof AuthenticatedHandoffsIdChatRoute
+  '/handoffs/$id/export': typeof AuthenticatedHandoffsIdExportRoute
   '/handoffs/$id/note': typeof AuthenticatedHandoffsIdNoteRoute
   '/handoffs/$id/sources': typeof AuthenticatedHandoffsIdSourcesRoute
   '/handoffs/$id/updates': typeof AuthenticatedHandoffsIdUpdatesRoute
@@ -130,7 +146,9 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AuthenticatedAdminUsersRoute
   '/handoffs/new': typeof AuthenticatedHandoffsNewRoute
   '/admin': typeof AuthenticatedAdminIndexRoute
+  '/handoffs/$id/activity': typeof AuthenticatedHandoffsIdActivityRoute
   '/handoffs/$id/chat': typeof AuthenticatedHandoffsIdChatRoute
+  '/handoffs/$id/export': typeof AuthenticatedHandoffsIdExportRoute
   '/handoffs/$id/note': typeof AuthenticatedHandoffsIdNoteRoute
   '/handoffs/$id/sources': typeof AuthenticatedHandoffsIdSourcesRoute
   '/handoffs/$id/updates': typeof AuthenticatedHandoffsIdUpdatesRoute
@@ -148,7 +166,9 @@ export interface FileRoutesById {
   '/_authenticated/handoffs/$id': typeof AuthenticatedHandoffsIdRouteWithChildren
   '/_authenticated/handoffs/new': typeof AuthenticatedHandoffsNewRoute
   '/_authenticated/admin/': typeof AuthenticatedAdminIndexRoute
+  '/_authenticated/handoffs/$id/activity': typeof AuthenticatedHandoffsIdActivityRoute
   '/_authenticated/handoffs/$id/chat': typeof AuthenticatedHandoffsIdChatRoute
+  '/_authenticated/handoffs/$id/export': typeof AuthenticatedHandoffsIdExportRoute
   '/_authenticated/handoffs/$id/note': typeof AuthenticatedHandoffsIdNoteRoute
   '/_authenticated/handoffs/$id/sources': typeof AuthenticatedHandoffsIdSourcesRoute
   '/_authenticated/handoffs/$id/updates': typeof AuthenticatedHandoffsIdUpdatesRoute
@@ -166,7 +186,9 @@ export interface FileRouteTypes {
     | '/handoffs/$id'
     | '/handoffs/new'
     | '/admin/'
+    | '/handoffs/$id/activity'
     | '/handoffs/$id/chat'
+    | '/handoffs/$id/export'
     | '/handoffs/$id/note'
     | '/handoffs/$id/sources'
     | '/handoffs/$id/updates'
@@ -180,7 +202,9 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/handoffs/new'
     | '/admin'
+    | '/handoffs/$id/activity'
     | '/handoffs/$id/chat'
+    | '/handoffs/$id/export'
     | '/handoffs/$id/note'
     | '/handoffs/$id/sources'
     | '/handoffs/$id/updates'
@@ -197,7 +221,9 @@ export interface FileRouteTypes {
     | '/_authenticated/handoffs/$id'
     | '/_authenticated/handoffs/new'
     | '/_authenticated/admin/'
+    | '/_authenticated/handoffs/$id/activity'
     | '/_authenticated/handoffs/$id/chat'
+    | '/_authenticated/handoffs/$id/export'
     | '/_authenticated/handoffs/$id/note'
     | '/_authenticated/handoffs/$id/sources'
     | '/_authenticated/handoffs/$id/updates'
@@ -310,11 +336,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedHandoffsIdNoteRouteImport
       parentRoute: typeof AuthenticatedHandoffsIdRoute
     }
+    '/_authenticated/handoffs/$id/export': {
+      id: '/_authenticated/handoffs/$id/export'
+      path: '/export'
+      fullPath: '/handoffs/$id/export'
+      preLoaderRoute: typeof AuthenticatedHandoffsIdExportRouteImport
+      parentRoute: typeof AuthenticatedHandoffsIdRoute
+    }
     '/_authenticated/handoffs/$id/chat': {
       id: '/_authenticated/handoffs/$id/chat'
       path: '/chat'
       fullPath: '/handoffs/$id/chat'
       preLoaderRoute: typeof AuthenticatedHandoffsIdChatRouteImport
+      parentRoute: typeof AuthenticatedHandoffsIdRoute
+    }
+    '/_authenticated/handoffs/$id/activity': {
+      id: '/_authenticated/handoffs/$id/activity'
+      path: '/activity'
+      fullPath: '/handoffs/$id/activity'
+      preLoaderRoute: typeof AuthenticatedHandoffsIdActivityRouteImport
       parentRoute: typeof AuthenticatedHandoffsIdRoute
     }
   }
@@ -334,7 +374,9 @@ const AuthenticatedAdminRouteWithChildren =
   AuthenticatedAdminRoute._addFileChildren(AuthenticatedAdminRouteChildren)
 
 interface AuthenticatedHandoffsIdRouteChildren {
+  AuthenticatedHandoffsIdActivityRoute: typeof AuthenticatedHandoffsIdActivityRoute
   AuthenticatedHandoffsIdChatRoute: typeof AuthenticatedHandoffsIdChatRoute
+  AuthenticatedHandoffsIdExportRoute: typeof AuthenticatedHandoffsIdExportRoute
   AuthenticatedHandoffsIdNoteRoute: typeof AuthenticatedHandoffsIdNoteRoute
   AuthenticatedHandoffsIdSourcesRoute: typeof AuthenticatedHandoffsIdSourcesRoute
   AuthenticatedHandoffsIdUpdatesRoute: typeof AuthenticatedHandoffsIdUpdatesRoute
@@ -343,7 +385,9 @@ interface AuthenticatedHandoffsIdRouteChildren {
 
 const AuthenticatedHandoffsIdRouteChildren: AuthenticatedHandoffsIdRouteChildren =
   {
+    AuthenticatedHandoffsIdActivityRoute: AuthenticatedHandoffsIdActivityRoute,
     AuthenticatedHandoffsIdChatRoute: AuthenticatedHandoffsIdChatRoute,
+    AuthenticatedHandoffsIdExportRoute: AuthenticatedHandoffsIdExportRoute,
     AuthenticatedHandoffsIdNoteRoute: AuthenticatedHandoffsIdNoteRoute,
     AuthenticatedHandoffsIdSourcesRoute: AuthenticatedHandoffsIdSourcesRoute,
     AuthenticatedHandoffsIdUpdatesRoute: AuthenticatedHandoffsIdUpdatesRoute,

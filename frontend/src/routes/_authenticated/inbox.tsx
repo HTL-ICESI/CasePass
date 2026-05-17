@@ -5,6 +5,8 @@ import { Inbox, Search, ArrowUpRight, Clock, FileText, AlertCircle } from "lucid
 
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/app/empty-state";
+import { ErrorState } from "@/components/app/error-state";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import type { Handoff } from "@/lib/api";
@@ -36,7 +38,7 @@ function InboxPage() {
   const items = list.data ?? [];
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-10">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-mint">Receiving counsel</p>
@@ -66,8 +68,23 @@ function InboxPage() {
               <Skeleton key={i} className="h-40 w-full rounded-2xl" />
             ))}
           </div>
+        ) : list.isError ? (
+          <ErrorState
+            title="We couldn't load your inbox"
+            description="Refresh to retry — your search term is kept."
+            onRetry={() => list.refetch()}
+          />
         ) : items.length === 0 ? (
-          <EmptyState />
+          <EmptyState
+            icon={<Inbox className="h-5 w-5" />}
+            tone="mint"
+            title={search ? "No matters match that search" : "Nothing routed your way"}
+            description={
+              search
+                ? "Try a different case name, party, or court."
+                : "When a solicitor sends a matter your way, it will land here with the brief, deadlines and cited sources ready to open."
+            }
+          />
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {items.map((h) => (
@@ -129,17 +146,3 @@ function InboxCard({ handoff: h }: { handoff: Handoff }) {
   );
 }
 
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-surface px-6 py-16 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-mint-soft text-onyx">
-        <Inbox className="h-5 w-5" />
-      </span>
-      <h2 className="mt-4 font-display text-lg font-semibold">Nothing routed your way</h2>
-      <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-        When a solicitor sends a matter your way, it will land here with the brief,
-        deadlines and cited sources ready to open.
-      </p>
-    </div>
-  );
-}

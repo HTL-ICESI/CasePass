@@ -4,6 +4,7 @@ import { MOCK_DOCUMENTS, MOCK_REVIEWS } from "./mock-reviews";
 import { answerForMatter, chunksForMatter, suggestedForMatter } from "./mock-chat";
 import { MOCK_UPDATES } from "./mock-updates";
 import type {
+  ActivityEvent,
   CreateHandoffInput,
   CreateUpdateInput,
   DashboardKpis,
@@ -11,6 +12,74 @@ import type {
   ListHandoffsParams,
   MatterUpdate,
 } from "./types";
+
+// Runtime activity log (in-memory). Seeded with derived events on first read.
+const ACTIVITY: Record<string, ActivityEvent[]> = {};
+const SEEDED = new Set<string>();
+
+function seedActivity(matterId: string) {
+  if (SEEDED.has(matterId)) return;
+  SEEDED.add(matterId);
+  const h = MOCK_HANDOFFS.find((m) => m.id === matterId);
+  if (!h) return;
+  const events: ActivityEvent[] = [];
+  events.push({
+    id: `a_${matterId}_created`,
+    matterId,
+    kind: "matter.created",
+    at: h.createdAt,
+    actorName: "System",
+    actorRole: "System",
+    summary: `Matter "${h.caseName}" created (${h.matterType}).`,
+  });
+  const docs = MOCK_DOCUMENTS[matterId] ?? [];
+  docs.forEach((d) => {
+    events.push({
+      id: `a_${d.id}_uploaded`,
+      matterId,
+      kind: "document.uploaded",
+      at: d.uploadedAt,
+      actorName: "Eleanor Hayes",
+      actorRole: "Solicitor",
+      summary: `Uploaded ${d.filename} (${d.pages} pages, ${d.status}).`,
+    });
+  });
+  if (docs.length > 0) {
+    const lastUpload = docs.reduce((acc, d) => (d.uploadedAt > acc ? d.uploadedAt : acc), docs[0].uploadedAt);
+    events.push({
+      id: `a_${matterId}_indexed`,
+      matterId,
+      kind: "matter.indexed",
+      at: lastUpload,
+      actorName: "CasePass",
+      actorRole: "System",
+      summary: `Indexed ${h.documentsCount} documents (${h.pagesIndexed} pages).`,
+    });
+  }
+  if (h.status === "handoff-active" && h.receivingId) {
+    events.push({
+      id: `a_${matterId}_accepted`,
+      matterId,
+      kind: "handoff.accepted",
+      at: h.createdAt,
+      actorName: "Marcus Whitman",
+      actorRole: "Receiving counsel",
+      summary: "Accepted the handoff and confirmed scope.",
+    });
+  }
+  (MOCK_UPDATES[matterId] ?? []).forEach((u) => {
+    events.push({
+      id: `a_${u.id}`,
+      matterId,
+      kind: "update.posted",
+      at: u.createdAt,
+      actorName: u.authorName,
+      actorRole: u.authorRole,
+      summary: u.whatWasDone,
+    });
+  });
+  ACTIVITY[matterId] = events;
+}
 
 const latency = (min = 220, max = 520) =>
   new Promise<void>((r) => setTimeout(r, Math.random() * (max - min) + min));
@@ -129,6 +198,38 @@ export const mockClient: CasePassClient = {
     };
     const list = MOCK_UPDATES[input.matterId] ?? (MOCK_UPDATES[input.matterId] = []);
     list.unshift(update);
+    seedActivity(input.matterId);
+    (ACTIVITY[input.matterId] ??= []).unshift({
+      id: `a_${update.id}`,
+      matterId: input.matterId,
+      kind: "update.posted",
+      at: update.createdAt,
+      actorName: update.authorName,
+      actorRole: update.authorRole,
+      summary: update.whatWasDone,
+    });
     return update;
+  },
+  async listActivity(handoffId) {
+    await latency(120, 240);
+    seedActivity(handoffId);
+    const list = ACTIVITY[handoffId] ?? [];
+    return [...list].sort((a, b) => b.at.localeCompare(a.at));
+  },
+  async logActivity(input) {
+    await latency(40, 100);
+    seedActivity(input.matterId);
+    const event: ActivityEvent = {
+      id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      matterId: input.matterId,
+      kind: input.kind,
+      at: new Date().toISOString(),
+      actorName: input.actorName,
+      actorRole: input.actorRole,
+      summary: input.summary,
+      meta: input.meta,
+    };
+    (ACTIVITY[input.matterId] ??= []).unshift(event);
+    return event;
   },
 };

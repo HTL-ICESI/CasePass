@@ -5,6 +5,8 @@ import { ShieldCheck, ShieldAlert, Shield, FileText, Loader2, CircleAlert } from
 import { api } from "@/lib/api";
 import type { Document, DocumentStatus, PrivilegeFlag } from "@/lib/api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/app/empty-state";
+import { ErrorState } from "@/components/app/error-state";
 
 export const Route = createFileRoute("/_authenticated/handoffs/$id/sources")({
   head: () => ({ meta: [{ title: "Source register — CasePass" }] }),
@@ -13,10 +15,11 @@ export const Route = createFileRoute("/_authenticated/handoffs/$id/sources")({
 
 function SourcesPage() {
   const { id } = Route.useParams();
-  const { data, isLoading } = useQuery({
+  const q = useQuery({
     queryKey: ["documents", id],
     queryFn: () => api.listDocuments(id),
   });
+  const { data, isLoading, isError } = q;
 
   return (
     <section className="rounded-2xl border border-border bg-surface shadow-[var(--shadow-1)]">
@@ -34,10 +37,22 @@ function SourcesPage() {
             <Skeleton key={i} className="h-12 w-full" />
           ))}
         </div>
+      ) : isError ? (
+        <div className="p-4">
+          <ErrorState
+            title="We couldn't load the source register"
+            onRetry={() => q.refetch()}
+          />
+        </div>
       ) : !data || data.length === 0 ? (
-        <p className="px-6 py-12 text-center text-sm text-muted-foreground">
-          No documents indexed yet.
-        </p>
+        <div className="p-4">
+          <EmptyState
+            icon={<FileText className="h-5 w-5" />}
+            tone="indigo"
+            title="No documents indexed yet"
+            description="When PDFs are uploaded to this matter they will appear here with their privilege and indexing status."
+          />
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

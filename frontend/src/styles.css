@@ -235,3 +235,28 @@
 .dark .text-onyx-300 {
   color: oklch(0.78 0.02 270);
 }
+
+/* Print styles for handoff package export */
+@media print {
+  @page { margin: 14mm; }
+  html, body { background: #ffffff !important; }
+  .cp-no-print { display: none !important; }
+  header.sticky { display: none !important; }
+  .cp-print-sheet { max-width: 100% !important; padding: 0 !important; box-shadow: none !important; border: 0 !important; }
+}
+
+/* Branded skeleton shimmer */
+@keyframes cp-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.cp-skeleton {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--muted) 100%, transparent) 0%,
+    color-mix(in oklab, var(--indigo-soft) 60%, transparent) 50%,
+    color-mix(in oklab, var(--muted) 100%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: cp-shimmer 1.6s ease-in-out infinite;
+}

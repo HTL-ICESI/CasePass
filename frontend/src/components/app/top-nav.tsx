@@ -1,5 +1,5 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { LogOut, ChevronDown, Moon, Sun } from "lucide-react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { LogOut, ChevronDown, Moon, Sun, Menu, X } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
 import { CasePassLogo } from "@/components/brand/logo";
@@ -31,7 +31,9 @@ export function TopNav() {
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -43,6 +45,10 @@ export function TopNav() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
   if (!user) return null;
   const items = NAV_BY_ROLE[user.role];
   const initials = user.name
@@ -53,8 +59,17 @@ export function TopNav() {
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/70 bg-canvas/85 backdrop-blur supports-[backdrop-filter]:bg-canvas/65">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-6 px-6">
-        <div className="flex items-center gap-10">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:gap-6 sm:px-6">
+        <div className="flex items-center gap-4 md:gap-10">
+          <button
+            type="button"
+            onClick={() => setMobileOpen((o) => !o)}
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+            aria-expanded={mobileOpen}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-muted-foreground transition-colors hover:text-foreground md:hidden"
+          >
+            {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          </button>
           <Link to="/dashboard" aria-label="CasePass home">
             <CasePassLogo size={32} />
           </Link>
@@ -131,6 +146,27 @@ export function TopNav() {
           </div>
         </div>
       </div>
+      {mobileOpen && (
+        <nav className="border-t border-border/70 bg-surface px-4 py-3 md:hidden">
+          <ul className="flex flex-col gap-1">
+            {items.map((it) => (
+              <li key={it.to}>
+                <Link
+                  to={it.to}
+                  activeOptions={{ exact: it.exact ?? false }}
+                  onClick={() => setMobileOpen(false)}
+                  className="block rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[status=active]:bg-indigo-soft/60 data-[status=active]:text-foreground data-[status=active]:font-medium"
+                >
+                  {it.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 border-t border-border/70 pt-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            {user.firm}
+          </p>
+        </nav>
+      )}
     </header>
   );
 }

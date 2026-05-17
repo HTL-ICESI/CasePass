@@ -73,7 +73,7 @@ function ChatPage() {
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
       {/* Chat column */}
-      <section className="flex h-[calc(100vh-22rem)] min-h-[480px] flex-col rounded-2xl border border-border bg-surface shadow-[var(--shadow-1)]">
+      <section className="flex h-[calc(100vh-18rem)] min-h-[420px] flex-col rounded-2xl border border-border bg-surface shadow-[var(--shadow-1)] lg:h-[calc(100vh-22rem)] lg:min-h-[480px]">
         <header className="flex items-center justify-between border-b border-border/70 px-5 py-3">
           <div>
             <h2 className="font-display text-base font-semibold">Ask the file</h2>
@@ -88,7 +88,7 @@ function ChatPage() {
 
         <div ref={scrollRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-6">
           {messages.length === 0 && !ask.isPending && (
-            <EmptyState
+            <ChatEmptyState
               suggestions={suggestions.data ?? []}
               onPick={submit}
             />
@@ -141,7 +141,7 @@ function ChatPage() {
       </section>
 
       {/* Sources panel */}
-      <aside className="flex h-[calc(100vh-22rem)] min-h-[480px] flex-col rounded-2xl border border-border bg-canvas/60 shadow-[var(--shadow-1)]">
+      <aside className="flex max-h-[480px] flex-col rounded-2xl border border-border bg-canvas/60 shadow-[var(--shadow-1)] lg:h-[calc(100vh-22rem)] lg:max-h-none lg:min-h-[480px]">
         <header className="border-b border-border/70 px-4 py-3">
           <h3 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
             Sources consulted
@@ -179,7 +179,7 @@ function ChatPage() {
   );
 }
 
-function EmptyState({
+function ChatEmptyState({
   suggestions,
   onPick,
 }: {
