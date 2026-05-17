@@ -350,7 +350,12 @@ const MATTER_REVIEW_PROBES = [
   { topic: 'live_deadlines', query: 'deadline due date hearing date time limit must be filed by' },
   { topic: 'urgent_issues', query: 'urgent risk issue jurisdiction conflict missing defect' },
   { topic: 'next_step', query: 'next required step prepare file serve defence reply bundle' },
-  { topic: 'amounts', query: 'amount claimed total damages court fee currency value' },
+  { topic: 'claim_relief', query: 'claim relief damages breach contract amount claimed interest losses' },
+  { topic: 'defence_dispute', query: 'defence counterclaim denied disputed acceptance testing notice failure' },
+  { topic: 'evidence', query: 'witness statement expert evidence joint statement documents exhibits' },
+  { topic: 'disclosure', query: 'disclosure inspection specific disclosure logs emails access order' },
+  { topic: 'costs', query: 'costs budget estimated costs incurred VAT court fee currency value' },
+  { topic: 'trial_timetable', query: 'trial date trial window timetable time estimate counsel dates to avoid' },
   { topic: 'parties', query: 'claimant defendant parties name address' },
 ];
 
@@ -364,9 +369,13 @@ async function getAllIndexedDocNames(handoffId) {
 
 async function getTopicSearchChunks(handoffId, topK = 12) {
   const seen = new Map();
+  const docOrder = [];
   const upsert = (chunk, topic) => {
     const key = `${chunk.doc_name}:${chunk.page}:${chunk.chunk_index}`;
     const existing = seen.get(key);
+    if (chunk.doc_name && !docOrder.includes(chunk.doc_name)) {
+      docOrder.push(chunk.doc_name);
+    }
     if (!existing || chunk.score > existing.score) {
       seen.set(key, { ...chunk, probe: topic });
     }
@@ -385,6 +394,9 @@ async function getTopicSearchChunks(handoffId, topK = 12) {
     const docNames = await getAllIndexedDocNames(handoffId);
     const coveredDocs = new Set(Array.from(seen.values()).map((chunk) => chunk.doc_name));
     for (const docName of docNames) {
+      if (!docOrder.includes(docName)) {
+        docOrder.push(docName);
+      }
       if (coveredDocs.has(docName)) continue;
       const directChunks = await getChunksByDoc(handoffId, docName, 2);
       directChunks.forEach((chunk) => upsert(chunk, `doc_coverage:${docName}`));
@@ -393,7 +405,33 @@ async function getTopicSearchChunks(handoffId, topK = 12) {
     // If document coverage lookup fails, return the topic probe results.
   }
 
-  const ranked = Array.from(seen.values()).sort((left, right) => right.score - left.score).slice(0, topK);
+  const allChunks = Array.from(seen.values());
+  const selected = [];
+  const selectedKeys = new Set();
+  const addSelected = (chunk) => {
+    if (!chunk || selected.length >= topK) {
+      return;
+    }
+    const key = `${chunk.doc_name}:${chunk.page}:${chunk.chunk_index}`;
+    if (selectedKeys.has(key)) {
+      return;
+    }
+    selected.push(chunk);
+    selectedKeys.add(key);
+  };
+
+  for (const docName of docOrder) {
+    const bestForDoc = allChunks
+      .filter((chunk) => chunk.doc_name === docName)
+      .sort((left, right) => right.score - left.score)[0];
+    addSelected(bestForDoc);
+  }
+
+  allChunks
+    .sort((left, right) => right.score - left.score)
+    .forEach(addSelected);
+
+  const ranked = selected.slice(0, topK);
   if (ranked.length > 0) {
     return ranked;
   }

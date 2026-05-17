@@ -2,7 +2,7 @@ const { logEvent } = require('./auditService');
 
 const HANDOFF_TRANSITIONS = Object.freeze({
   draft: ['clearance_pending'],
-  clearance_pending: ['clearance_failed', 'compliance_hold', 'file_upload_open'],
+  clearance_pending: ['clearance_failed', 'compliance_hold', 'file_upload_open', 'pack_building'],
   clearance_failed: [],
   compliance_hold: ['file_upload_open'],
   file_upload_open: ['pack_building'],

@@ -63,7 +63,20 @@ function OverviewPage() {
       toast.error(error instanceof Error ? error.message : "Could not accept the handoff."),
   });
 
-  if (review.isLoading || handoff.isLoading) {
+  const refreshBrief = useMutation({
+    mutationFn: () => api.createHandoverNote(id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["handoff", id] }),
+        queryClient.invalidateQueries({ queryKey: ["matter-review", id] }),
+      ]);
+      toast.success("AI brief refreshed.");
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not refresh the AI brief."),
+  });
+
+  if (handoff.isLoading) {
     return (
       <div className="grid gap-4 md:grid-cols-3">
         <Skeleton className="h-48 md:col-span-2" />
@@ -75,11 +88,13 @@ function OverviewPage() {
   const h = handoff.data;
   const r = h ? (review.data ?? buildFallbackReview(h)) : null;
   const isReceiver = Boolean(user && h && h.receivingId === user.id);
+  const isSender = Boolean(user && h && h.ownerId === user.id);
 
   if (!h) {
     return <p className="text-sm text-muted-foreground">Matter details are not available yet.</p>;
   }
   const overview = buildOverviewModel(h, r);
+  const canRefreshBrief = isSender && ["pack_building", "pack_review"].includes(h.backendStatus);
 
   return (
     <div className="grid gap-5 md:grid-cols-3">
@@ -108,21 +123,52 @@ function OverviewPage() {
                 <FactLine key={fact.key} note={fact} onOpenCitation={openCitation} />
               ))}
             </div>
+            {overview.summary && (
+              <div className="border-t border-border/60 pt-3">
+                <FactLine note={overview.summary} onOpenCitation={openCitation} />
+              </div>
+            )}
+            {canRefreshBrief && (
+              <div className="flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => refreshBrief.mutate()}
+                  disabled={refreshBrief.isPending}
+                >
+                  {refreshBrief.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  {h.noteId ? "Refresh AI brief" : "Generate AI brief"}
+                </Button>
+              </div>
+            )}
           </div>
         </Section>
+
+        {overview.fileFacts.length > 0 && (
+          <Section icon={<FileText className="h-4 w-4" />} title="Key file facts">
+            <ul className="space-y-3">
+              {overview.fileFacts.map((fact) => (
+                <li
+                  key={fact.key}
+                  className="rounded-md border border-border/60 bg-canvas/30 px-3 py-2"
+                >
+                  <FactLine note={fact} onOpenCitation={openCitation} />
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
 
         <Section icon={<Compass className="h-4 w-4" />} title="Most recent event">
           <FactLine note={overview.recentEvent} onOpenCitation={openCitation} />
         </Section>
 
-        <Section
-          icon={<AlertTriangle className="h-4 w-4 text-warning" />}
-          title="Urgent issues"
-          accent="warning"
-        >
-          {r.urgentIssues.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No urgent issues flagged.</p>
-          ) : (
+        {overview.urgentIssues.length > 0 && (
+          <Section
+            icon={<AlertTriangle className="h-4 w-4 text-warning" />}
+            title="Urgent issues"
+            accent="warning"
+          >
             <ul className="space-y-2">
               {overview.urgentIssues.map((u) => (
                 <li
@@ -133,8 +179,8 @@ function OverviewPage() {
                 </li>
               ))}
             </ul>
-          )}
-        </Section>
+          </Section>
+        )}
 
         <Section icon={<Compass className="h-4 w-4 text-indigo" />} title="Next step">
           <FactLine note={overview.nextStep} onOpenCitation={openCitation} />
@@ -183,7 +229,7 @@ function OverviewPage() {
         </Section>
 
         <Section icon={<Calendar className="h-4 w-4" />} title="Deadlines">
-          {h.deadlines.length === 0 ? (
+          {h.deadlines.length === 0 && overview.liveDeadlines.length === 0 ? (
             <p className="text-sm text-muted-foreground">No scheduled deadlines.</p>
           ) : (
             <ul className="space-y-3">
@@ -207,6 +253,14 @@ function OverviewPage() {
                       />
                     </div>
                   )}
+                </li>
+              ))}
+              {overview.liveDeadlines.map((d) => (
+                <li
+                  key={d.key}
+                  className="border-b border-border/60 pb-3 last:border-b-0 last:pb-0"
+                >
+                  <FactLine note={d} onOpenCitation={openCitation} />
                 </li>
               ))}
             </ul>
@@ -358,6 +412,7 @@ function buildFallbackReview(handoff: Handoff): MatterReview {
     missingDocs: [],
     nextStep: { text: nextStep },
     liveDeadlines: [],
+    fileBasedFacts: [],
   };
 }
 
@@ -365,6 +420,11 @@ type DisplayNote = ReviewNote & { key: string };
 
 function buildOverviewModel(handoff: Handoff, review: MatterReview) {
   const stage = makeDisplayNote("stage", review.stage, review.stageCitation);
+  const summary = makeDisplayNote(
+    "summary",
+    review.executiveSummary?.text || handoff.latestNote?.executiveSummary || handoff.summary,
+    review.executiveSummary?.citation || handoff.latestNote?.executiveSummaryCitation,
+  );
   const rawRecentEvent = makeDisplayNote(
     "recent",
     review.lastEvent.text,
@@ -393,22 +453,51 @@ function buildOverviewModel(handoff: Handoff, review: MatterReview) {
       !areSimilarNotes(note, recentEvent) &&
       !areSimilarNotes(note, nextStep),
   );
-  const coreFacts = uniqueNotes([stage, recentEvent]).slice(0, 2);
+  const liveDeadlines = uniqueNotes(
+    [...(review.liveDeadlines || []), ...(handoff.latestNote?.liveDeadlines || [])].map(
+      (note, index) => makeDisplayNote(`deadline-${index}`, note.text, note.citation),
+    ),
+  ).filter(
+    (note) =>
+      !areSimilarNotes(note, stage) &&
+      !areSimilarNotes(note, recentEvent) &&
+      !areSimilarNotes(note, nextStep),
+  );
+  const fileFacts = uniqueNotes(
+    [...(review.fileBasedFacts || []), ...(handoff.latestNote?.fileBasedFacts || [])].map(
+      (note, index) => makeDisplayNote(`fact-${index}`, note.text, note.citation),
+    ),
+  )
+    .filter(
+      (note) =>
+        !areSimilarNotes(note, summary) &&
+        !areSimilarNotes(note, stage) &&
+        !areSimilarNotes(note, recentEvent) &&
+        !areSimilarNotes(note, nextStep) &&
+        !urgentIssues.some((issue) => areSimilarNotes(note, issue)),
+    )
+    .slice(0, 5);
+  const coreFacts = uniqueNotes([stage]).slice(0, 1);
   const headline = makeHeadline(handoff, stage.text || recentEvent.text);
   const evidence = uniqueCitations([
+    summary.citation,
     stage.citation,
     recentEvent.citation,
     nextStep.citation,
+    ...fileFacts.map((note) => note.citation),
     ...urgentIssues.map((note) => note.citation),
-    ...(review.liveDeadlines || []).map((note) => note.citation),
+    ...liveDeadlines.map((note) => note.citation),
   ]);
 
   return {
     headline,
+    summary: isUsefulSummary(summary, stage, recentEvent) ? summary : null,
     coreFacts,
+    fileFacts,
     recentEvent,
     nextStep,
     urgentIssues,
+    liveDeadlines,
     evidence,
   };
 }
@@ -439,7 +528,7 @@ function uniqueCitations(citations: Array<Citation | undefined>) {
   const seen = new Set<string>();
   return citations.filter((citation): citation is Citation => {
     if (!citation) return false;
-    const key = `${citation.doc}:${citation.page}`;
+    const key = `${citation.doc}:${citation.page}:${citation.chunkIndex ?? citation.preview ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -475,6 +564,12 @@ function isActionableIssue(text: string) {
   return /\b(urgent|risk|deadline|due|overdue|missing|hearing|defence|defense|disclosure|serve|file|order|permission|costs|breach)\b/i.test(
     text,
   );
+}
+
+function isUsefulSummary(summary: DisplayNote, stage: DisplayNote, recentEvent: DisplayNote) {
+  if (!summary.text || summary.text === "No summary available yet.") return false;
+  if (/^not found in file\.?$/i.test(summary.text)) return false;
+  return !areSimilarNotes(summary, stage) && !areSimilarNotes(summary, recentEvent);
 }
 
 function makeHeadline(handoff: Handoff, stageText: string) {

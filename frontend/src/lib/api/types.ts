@@ -22,6 +22,8 @@ export type Document = {
 export type Citation = {
   doc: string;
   page: number;
+  chunkIndex?: number | null;
+  anchorText?: string;
   preview?: string;
   score?: number;
 };
@@ -96,11 +98,13 @@ export type ReviewNote = { text: string; citation?: Citation };
 export type MatterReview = {
   stage: string;
   stageCitation?: Citation;
+  executiveSummary?: ReviewNote;
   lastEvent: ReviewNote;
   urgentIssues: ReviewNote[];
   missingDocs: string[];
   nextStep: ReviewNote;
   liveDeadlines?: ReviewNote[];
+  fileBasedFacts?: ReviewNote[];
 };
 
 export type Handoff = {
@@ -127,6 +131,7 @@ export type Handoff = {
   latestReview?: MatterReview | null;
   latestNote?: {
     executiveSummary?: string;
+    executiveSummaryCitation?: Citation;
     currentProceduralStatus?: string;
     currentProceduralStatusCitation?: Citation;
     nextRequiredStep?: string;
@@ -134,7 +139,7 @@ export type Handoff = {
     liveDeadlines?: ReviewNote[];
     riskFlags?: ReviewNote[];
     fileBasedFacts?: ReviewNote[];
-    strategicNotes?: string[];
+    strategicNotes?: ReviewNote[];
   } | null;
 };
 

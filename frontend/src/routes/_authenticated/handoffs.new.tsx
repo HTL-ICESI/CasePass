@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -26,7 +26,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
-import type { Court, MatterType } from "@/lib/api/types";
+import type { Court, Handoff, MatterType } from "@/lib/api/types";
 
 export const Route = createFileRoute("/_authenticated/handoffs/new")({
   head: () => ({ meta: [{ title: "New handoff — CasePass" }] }),
@@ -65,9 +65,11 @@ type UploadItem = {
   name: string;
   size: number;
   pages: number;
-  progress: number; // 0–100
-  status: "indexing" | "indexed" | "error";
+  progress: number;
+  status: "queued" | "uploading" | "indexing" | "indexed" | "error";
   file: File;
+  backendDocumentId?: string;
+  errorMessage?: string;
 };
 
 const STEPS = [
@@ -86,6 +88,7 @@ function NewHandoffPage() {
     enabled: !!user,
   });
   const [step, setStep] = useState(1);
+  const [draftHandoff, setDraftHandoff] = useState<Handoff | null>(null);
   const [form, setForm] = useState<MatterForm>({
     caseName: "",
     matterType: "",
@@ -138,15 +141,30 @@ function NewHandoffPage() {
     form.summary.trim().length > 10;
 
   const allIndexed = uploads.length > 0 && uploads.every((u) => u.status === "indexed");
+  const hasUploadErrors = uploads.some((u) => u.status === "error");
 
-  const createMut = useMutation({
-    mutationFn: api.createHandoff,
+  const createDraftMut = useMutation({
+    mutationFn: () => {
+      if (!user) throw new Error("You must be signed in to create a handoff.");
+      return api.createHandoff({
+        caseName: form.caseName.trim(),
+        matterType: form.matterType as MatterType,
+        court: form.court as Court,
+        plaintiff: form.plaintiff.trim(),
+        defendant: form.defendant.trim(),
+        receiverId: form.receiverId,
+        nextHearingAt: form.nextHearingAt || undefined,
+        summary: form.summary.trim(),
+        ownerId: user.id,
+        files: [],
+      });
+    },
     onSuccess: (h) => {
+      setDraftHandoff(h);
       queryClient.invalidateQueries({ queryKey: ["handoffs"] });
       queryClient.invalidateQueries({ queryKey: ["inbox"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-kpis"] });
-      toast.success(`Handoff created — ${h.caseName}`);
-      navigate({ to: "/handoffs/$id", params: { id: h.id } });
+      setStep(2);
     },
     onError: (error) => {
       const body = error instanceof Error ? (error as Error & { body?: unknown }).body : null;
@@ -161,20 +179,37 @@ function NewHandoffPage() {
     },
   });
 
+  const buildBriefMut = useMutation({
+    mutationFn: async () => {
+      if (!draftHandoff) throw new Error("Create the handoff before generating the AI brief.");
+      const result = await api.createHandoverNote(draftHandoff.id);
+      return result.handoff || ((await api.getHandoff(draftHandoff.id)) as Handoff);
+    },
+    onSuccess: (h) => {
+      queryClient.invalidateQueries({ queryKey: ["handoffs"] });
+      queryClient.invalidateQueries({ queryKey: ["inbox"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-kpis"] });
+      queryClient.invalidateQueries({ queryKey: ["handoff", h.id] });
+      queryClient.invalidateQueries({ queryKey: ["matter-review", h.id] });
+      toast.success(`Handoff created — ${h.caseName}`);
+      navigate({ to: "/handoffs/$id", params: { id: h.id } });
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not generate the AI brief."),
+  });
+
+  const continueFromMatter = () => {
+    if (!matterValid || createDraftMut.isPending) return;
+    if (draftHandoff) {
+      setStep(2);
+      return;
+    }
+    createDraftMut.mutate();
+  };
+
   const submit = () => {
-    if (!user || !matterValid || !allIndexed) return;
-    createMut.mutate({
-      caseName: form.caseName.trim(),
-      matterType: form.matterType as MatterType,
-      court: form.court as Court,
-      plaintiff: form.plaintiff.trim(),
-      defendant: form.defendant.trim(),
-      receiverId: form.receiverId,
-      nextHearingAt: form.nextHearingAt || undefined,
-      summary: form.summary.trim(),
-      ownerId: user.id,
-      files: uploads.map((u) => ({ name: u.name, size: u.size, pages: u.pages, file: u.file })),
-    });
+    if (!draftHandoff || !matterValid || !allIndexed) return;
+    buildBriefMut.mutate();
   };
 
   return (
@@ -226,7 +261,9 @@ function NewHandoffPage() {
             recipientsError={recipients.error}
           />
         )}
-        {step === 2 && <UploadStep uploads={uploads} setUploads={setUploads} />}
+        {step === 2 && (
+          <UploadStep handoffId={draftHandoff?.id} uploads={uploads} setUploads={setUploads} />
+        )}
         {step === 3 && (
           <ReviewStep
             form={form}
@@ -242,23 +279,37 @@ function NewHandoffPage() {
         <Button
           variant="ghost"
           onClick={() => setStep((s) => Math.max(1, s - 1))}
-          disabled={step === 1 || createMut.isPending}
+          disabled={step === 1 || buildBriefMut.isPending}
         >
           <ArrowLeft className="mr-1.5 h-4 w-4" /> Back
         </Button>
 
         {step < 3 ? (
           <Button
-            onClick={() => setStep((s) => s + 1)}
-            disabled={(step === 1 && !matterValid) || (step === 2 && !allIndexed)}
+            onClick={step === 1 ? continueFromMatter : () => setStep(3)}
+            disabled={
+              (step === 1 && (!matterValid || createDraftMut.isPending)) ||
+              (step === 2 && (!allIndexed || hasUploadErrors))
+            }
           >
-            Continue <ArrowRight className="ml-1.5 h-4 w-4" />
+            {step === 1 && createDraftMut.isPending ? (
+              <>
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Creating handoff…
+              </>
+            ) : (
+              <>
+                Continue <ArrowRight className="ml-1.5 h-4 w-4" />
+              </>
+            )}
           </Button>
         ) : (
-          <Button onClick={submit} disabled={createMut.isPending || !matterValid || !allIndexed}>
-            {createMut.isPending ? (
+          <Button
+            onClick={submit}
+            disabled={buildBriefMut.isPending || !draftHandoff || !matterValid || !allIndexed}
+          >
+            {buildBriefMut.isPending ? (
               <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Sending…
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Building AI brief…
               </>
             ) : (
               <>
@@ -451,17 +502,114 @@ function MatterStep({
 /* ---------- Step 2: upload + simulated indexing ---------- */
 
 function UploadStep({
+  handoffId,
   uploads,
   setUploads,
 }: {
+  handoffId?: string;
   uploads: UploadItem[];
   setUploads: React.Dispatch<React.SetStateAction<UploadItem[]>>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [drag, setDrag] = useState(false);
+  const [removingIds, setRemovingIds] = useState<Set<string>>(() => new Set());
+
+  const uploadOne = useCallback(
+    async (item: UploadItem) => {
+      if (!handoffId) {
+        setUploads((prev) =>
+          prev.map((upload) =>
+            upload.id === item.id
+              ? {
+                  ...upload,
+                  status: "error",
+                  progress: 100,
+                  errorMessage: "Handoff was not created.",
+                }
+              : upload,
+          ),
+        );
+        return;
+      }
+
+      setUploads((prev) =>
+        prev.map((upload) =>
+          upload.id === item.id ? { ...upload, status: "uploading", progress: 12 } : upload,
+        ),
+      );
+
+      const timer = window.setInterval(() => {
+        setUploads((prev) =>
+          prev.map((upload) => {
+            if (upload.id !== item.id || !["uploading", "indexing"].includes(upload.status)) {
+              return upload;
+            }
+            return {
+              ...upload,
+              status: upload.progress > 35 ? "indexing" : upload.status,
+              progress: Math.min(92, upload.progress + 4 + Math.random() * 8),
+            };
+          }),
+        );
+      }, 450);
+
+      try {
+        setUploads((prev) =>
+          prev.map((upload) =>
+            upload.id === item.id ? { ...upload, status: "indexing", progress: 35 } : upload,
+          ),
+        );
+        const document = await api.uploadHandoffDocument(
+          handoffId,
+          item.file,
+          "pleading",
+          item.pages,
+        );
+        setUploads((prev) =>
+          prev.map((upload) =>
+            upload.id === item.id
+              ? {
+                  ...upload,
+                  backendDocumentId: document.id,
+                  pages: document.pages || upload.pages,
+                  progress: 100,
+                  status: document.status === "indexed" ? "indexed" : "error",
+                  errorMessage:
+                    document.status === "indexed"
+                      ? undefined
+                      : "This PDF uploaded but could not be indexed.",
+                }
+              : upload,
+          ),
+        );
+      } catch (error) {
+        setUploads((prev) =>
+          prev.map((upload) =>
+            upload.id === item.id
+              ? {
+                  ...upload,
+                  progress: 100,
+                  status: "error",
+                  errorMessage:
+                    error instanceof Error ? error.message : "Could not index this PDF.",
+                }
+              : upload,
+          ),
+        );
+      } finally {
+        window.clearInterval(timer);
+      }
+    },
+    [handoffId, setUploads],
+  );
 
   const addFiles = useCallback(
     (files: FileList | File[]) => {
+      if (!handoffId) {
+        toast.error("Create the handoff before uploading documents.");
+        return;
+      }
+
       const accepted = Array.from(files).filter(
         (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"),
       );
@@ -476,33 +624,42 @@ function UploadStep({
         // estimate ~50KB/page; clamp to reasonable range
         pages: Math.max(3, Math.min(420, Math.round(f.size / 50_000))),
         progress: 0,
-        status: "indexing",
+        status: "queued",
         file: f,
       }));
       setUploads((prev) => [...prev, ...items]);
+      items.forEach((item) => {
+        void uploadOne(item);
+      });
     },
-    [setUploads],
+    [handoffId, setUploads, uploadOne],
   );
 
-  // Tick progress for any indexing items
-  useEffect(() => {
-    const indexing = uploads.filter((u) => u.status === "indexing");
-    if (indexing.length === 0) return;
-    const t = setInterval(() => {
-      setUploads((prev) =>
-        prev.map((u) => {
-          if (u.status !== "indexing") return u;
-          const next = Math.min(100, u.progress + 6 + Math.random() * 12);
-          return next >= 100
-            ? { ...u, progress: 100, status: "indexed" }
-            : { ...u, progress: next };
-        }),
-      );
-    }, 220);
-    return () => clearInterval(t);
-  }, [uploads, setUploads]);
+  const remove = useCallback(
+    async (upload: UploadItem) => {
+      if (upload.status === "uploading" || upload.status === "indexing") return;
 
-  const remove = (id: string) => setUploads((prev) => prev.filter((u) => u.id !== id));
+      if (handoffId && upload.backendDocumentId) {
+        setRemovingIds((prev) => new Set(prev).add(upload.id));
+        try {
+          await api.deleteHandoffDocument(handoffId, upload.backendDocumentId);
+          toast.success("Document removed.");
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Could not remove this document.");
+          return;
+        } finally {
+          setRemovingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(upload.id);
+            return next;
+          });
+        }
+      }
+
+      setUploads((prev) => prev.filter((u) => u.id !== upload.id));
+    },
+    [handoffId, setUploads],
+  );
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -551,44 +708,73 @@ function UploadStep({
 
       {uploads.length > 0 && (
         <ul className="grid w-full gap-2">
-          {uploads.map((u) => (
-            <li
-              key={u.id}
-              className="flex w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl border border-border bg-surface px-4 py-3"
-            >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-soft text-onyx">
-                <FileText className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center justify-between gap-3">
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium">{u.name}</p>
-                  <p className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {formatBytes(u.size)} · {u.pages} p.
-                  </p>
-                </div>
-                <div className="mt-2 flex items-center gap-3">
-                  <Progress value={u.progress} className="h-1.5 flex-1" />
-                  <span
-                    className={
-                      "font-mono text-[10px] uppercase tracking-wider " +
-                      (u.status === "indexed" ? "text-mint" : "text-muted-foreground")
-                    }
-                  >
-                    {u.status === "indexed" ? "Indexed" : `Indexing ${Math.round(u.progress)}%`}
-                  </span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => remove(u.id)}
-                className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-onyx"
-                aria-label="Remove file"
+          {uploads.map((u) => {
+            const isBusy = u.status === "uploading" || u.status === "indexing";
+            const isRemoving = removingIds.has(u.id);
+
+            return (
+              <li
+                key={u.id}
+                className="flex w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl border border-border bg-surface px-4 py-3"
               >
-                <X className="h-4 w-4" />
-              </button>
-            </li>
-          ))}
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-soft text-onyx">
+                  <FileText className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <p className="min-w-0 flex-1 truncate text-sm font-medium">{u.name}</p>
+                    <p className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {formatBytes(u.size)} · {u.pages} p.
+                    </p>
+                  </div>
+                  <div className="mt-2 flex items-center gap-3">
+                    <Progress value={u.progress} className="h-1.5 flex-1" />
+                    <span
+                      className={
+                        "font-mono text-[10px] uppercase tracking-wider " +
+                        (u.status === "indexed"
+                          ? "text-mint"
+                          : u.status === "error"
+                            ? "text-destructive"
+                            : "text-muted-foreground")
+                      }
+                    >
+                      {isRemoving ? "Removing" : formatUploadStatus(u)}
+                    </span>
+                  </div>
+                  {u.errorMessage && (
+                    <p className="mt-1 text-xs text-destructive">{u.errorMessage}</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void remove(u)}
+                  disabled={isBusy || isRemoving}
+                  className="rounded-md p-1 text-muted-foreground transition hover:bg-muted hover:text-onyx disabled:cursor-not-allowed disabled:opacity-45"
+                  aria-label={u.status === "error" ? "Remove failed file" : "Remove file"}
+                  title={
+                    isBusy
+                      ? "Wait until indexing finishes before removing this file"
+                      : "Remove file"
+                  }
+                >
+                  {isRemoving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <X className="h-4 w-4" />
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
+      )}
+
+      {hasFailedUploads(uploads) && (
+        <p className="text-xs text-destructive">
+          Remove failed files before continuing. Only indexed documents are used to generate the AI
+          brief.
+        </p>
       )}
 
       {uploads.length === 0 && (
@@ -684,4 +870,16 @@ function formatBytes(b: number) {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatUploadStatus(upload: UploadItem) {
+  if (upload.status === "indexed") return "Indexed";
+  if (upload.status === "error") return "Index failed";
+  if (upload.status === "uploading") return `Uploading ${Math.round(upload.progress)}%`;
+  if (upload.status === "indexing") return `Indexing ${Math.round(upload.progress)}%`;
+  return "Queued";
+}
+
+function hasFailedUploads(uploads: UploadItem[]) {
+  return uploads.some((upload) => upload.status === "error");
 }

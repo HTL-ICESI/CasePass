@@ -1,6 +1,7 @@
 jest.mock('../src/services/ragService', () => ({
   searchChunks: jest.fn(),
   getIndexedChunksForHandoff: jest.fn(),
+  getTopicSearchChunks: jest.fn(),
 }));
 jest.mock('../src/services/claudeService', () => ({
   chatWithSources: jest.fn(),
@@ -8,7 +9,7 @@ jest.mock('../src/services/claudeService', () => ({
 }));
 
 const request = require('supertest');
-const { searchChunks, getIndexedChunksForHandoff } = require('../src/services/ragService');
+const { searchChunks, getIndexedChunksForHandoff, getTopicSearchChunks } = require('../src/services/ragService');
 const { chatWithSources, streamChatWithSources } = require('../src/services/claudeService');
 const { resetDomainData, createCase, createHandoff } = require('./helpers');
 const { app } = require('../src/index');
@@ -18,6 +19,7 @@ describe('chat routes', () => {
     await resetDomainData();
     jest.clearAllMocks();
     getIndexedChunksForHandoff.mockResolvedValue([]);
+    getTopicSearchChunks.mockResolvedValue([]);
   });
 
   test('chat enforces auth, validation, receiver release gate, empty results, and successful sourced answers', async () => {

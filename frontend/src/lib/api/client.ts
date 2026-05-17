@@ -60,7 +60,12 @@ export interface CasePassClient {
   listUsers(): Promise<FirmUser[]>;
   setUserActive(userId: string, active: boolean): Promise<FirmUser>;
   listAssignableUsers(): Promise<FirmUser[]>;
-  uploadHandoffDocument(handoffId: string, file: File, docType?: string): Promise<Document>;
+  uploadHandoffDocument(
+    handoffId: string,
+    file: File,
+    docType?: string,
+    pages?: number,
+  ): Promise<Document>;
   flushStagedUploads(handoffId: string): Promise<Document[]>;
   approveClearance(handoffId: string): Promise<Handoff>;
   createHandoverNote(handoffId: string): Promise<ReviewActionResult>;
@@ -167,20 +172,34 @@ function parseJson<T>(value: unknown, fallback: T): T {
   return value as T;
 }
 
-function makeCitation(doc: string, page: number) {
-  return { doc, page };
+type BackendSource = {
+  doc_name: string;
+  page: number;
+  chunk_index?: number | null;
+  chunk_text?: string;
+  score?: number;
+  anchor_text?: string;
+};
+
+function makeCitation(doc: string, page: number, source?: BackendSource) {
+  return {
+    doc,
+    page,
+    chunkIndex: source?.chunk_index ?? null,
+    anchorText: source?.anchor_text,
+    preview: source?.chunk_text,
+    score: typeof source?.score === "number" ? source.score : undefined,
+  };
 }
 
-function buildSourceLookup(
-  sources: Array<{ doc_name: string; page: number; chunk_text?: string; score?: number }> = [],
-) {
-  const map = new Map<string, { preview?: string; score?: number }>();
+function buildSourceLookup(sources: BackendSource[] = []) {
+  const map = new Map<string, BackendSource[]>();
 
   for (const source of sources) {
-    map.set(`${source.doc_name}:${Number(source.page)}`, {
-      preview: source.chunk_text,
-      score: typeof source.score === "number" ? source.score : undefined,
-    });
+    const key = `${source.doc_name}:${Number(source.page)}`;
+    const existing = map.get(key) || [];
+    existing.push(source);
+    map.set(key, existing);
   }
 
   return map;
@@ -205,17 +224,52 @@ function stripCitationText(text: string | undefined) {
     .trim();
 }
 
+function tokeniseForMatch(text: string) {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9£$€]+/i)
+    .filter((term) => term.length >= 3);
+}
+
+function sourceMatchScore(anchorText: string, source?: BackendSource) {
+  const terms = Array.from(new Set(tokeniseForMatch(anchorText)));
+  if (!source || terms.length === 0) return 0;
+  const haystack = `${source.anchor_text || ""} ${source.chunk_text || ""}`
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  return terms.filter((term) => haystack.includes(term)).length / terms.length;
+}
+
+function pickBestSource(anchorText: string, sources: BackendSource[] = []) {
+  let best: BackendSource | undefined;
+  let bestScore = -1;
+
+  for (const source of sources) {
+    const score = sourceMatchScore(anchorText, source);
+    if (score > bestScore) {
+      best = source;
+      bestScore = score;
+    }
+  }
+
+  return best || sources[0];
+}
+
 function mapReviewNote(
   text: string | undefined,
-  sourceLookup?: Map<string, { preview?: string; score?: number }>,
+  sourceLookup?: Map<string, BackendSource[]>,
 ): { text: string; citation?: Citation } {
   const citation = extractCitation(text);
-  const source = citation ? sourceLookup?.get(`${citation.doc}:${citation.page}`) : undefined;
+  const strippedText = stripCitationText(text);
+  const source = citation
+    ? pickBestSource(strippedText, sourceLookup?.get(`${citation.doc}:${citation.page}`))
+    : undefined;
   return {
-    text: stripCitationText(text),
-    citation: citation
-      ? { ...citation, preview: source?.preview, score: source?.score }
-      : undefined,
+    text: strippedText,
+    citation: citation ? makeCitation(citation.doc, citation.page, source) : undefined,
   };
 }
 
@@ -225,24 +279,34 @@ function mapReviewFromAiDraft(draft: any): MatterReview {
     draft?.current_procedural_status || draft?.stage_of_proceedings || "Not yet reviewed.";
   const nextRequired =
     draft?.next_required_step || draft?.next_procedural_step || "Awaiting next step.";
+  const executiveSummary = mapReviewNote(draft?.executive_summary, sourceLookup);
   const urgentIssues = Array.isArray(draft?.risk_flags)
     ? draft.risk_flags
     : Array.isArray(draft?.urgent_issues)
       ? draft.urgent_issues
       : [];
   const missingDocs = Array.isArray(draft?.missing_documents) ? draft.missing_documents : [];
+  const fileBasedFacts = Array.isArray(draft?.file_based_facts) ? draft.file_based_facts : [];
   const stageNote = mapReviewNote(currentStatus, sourceLookup);
 
   return {
     stage: stageNote.text,
     stageCitation: stageNote.citation,
-    lastEvent: mapReviewNote(draft?.most_recent_operative_event || currentStatus, sourceLookup),
+    executiveSummary,
+    lastEvent: mapReviewNote(
+      draft?.most_recent_operative_event ||
+        fileBasedFacts[0] ||
+        draft?.executive_summary ||
+        currentStatus,
+      sourceLookup,
+    ),
     urgentIssues: urgentIssues.map((item: string) => mapReviewNote(item, sourceLookup)),
     missingDocs,
     nextStep: mapReviewNote(nextRequired, sourceLookup),
     liveDeadlines: Array.isArray(draft?.live_deadlines)
       ? draft.live_deadlines.map((item: string) => mapReviewNote(item, sourceLookup))
       : [],
+    fileBasedFacts: fileBasedFacts.map((item: string) => mapReviewNote(item, sourceLookup)),
   };
 }
 
@@ -255,10 +319,12 @@ function mapLatestNote(note: BackendNote | null) {
   }
 
   const currentProceduralStatus = mapReviewNote(noteDraft.current_procedural_status, sourceLookup);
+  const executiveSummary = mapReviewNote(noteDraft.executive_summary, sourceLookup);
   const nextRequiredStep = mapReviewNote(noteDraft.next_required_step, sourceLookup);
 
   return {
-    executiveSummary: stripCitationText(noteDraft.executive_summary),
+    executiveSummary: executiveSummary.text,
+    executiveSummaryCitation: executiveSummary.citation,
     currentProceduralStatus: currentProceduralStatus.text,
     currentProceduralStatusCitation: currentProceduralStatus.citation,
     nextRequiredStep: nextRequiredStep.text,
@@ -272,7 +338,9 @@ function mapLatestNote(note: BackendNote | null) {
     fileBasedFacts: Array.isArray(noteDraft.file_based_facts)
       ? noteDraft.file_based_facts.map((item: string) => mapReviewNote(item, sourceLookup))
       : [],
-    strategicNotes: Array.isArray(noteDraft.strategic_notes) ? noteDraft.strategic_notes : [],
+    strategicNotes: Array.isArray(noteDraft.strategic_notes)
+      ? noteDraft.strategic_notes.map((item: string) => mapReviewNote(item, sourceLookup))
+      : [],
   };
 }
 
@@ -401,16 +469,17 @@ function mapUpdate(
 function mapChatAnswer(payload: any): ChatAnswer {
   const insufficient =
     payload.answer === "Insufficient evidence in the file to answer this question.";
-  const sourceLookup = buildSourceLookup(payload.sources || []);
   return {
     text: payload.answer,
     insufficient,
     citations: (payload.sources || []).map((source: any) => ({
       doc: source.doc_name,
       page: Number(source.page),
-      chunkId: `${source.doc_name}:${source.page}`,
-      preview: sourceLookup.get(`${source.doc_name}:${Number(source.page)}`)?.preview,
-      score: sourceLookup.get(`${source.doc_name}:${Number(source.page)}`)?.score,
+      chunkIndex: source.chunk_index ?? null,
+      anchorText: source.anchor_text,
+      chunkId: `${source.doc_name}:${source.page}:${source.chunk_index ?? "na"}:${String(source.anchor_text || "").slice(0, 80)}`,
+      preview: source.chunk_text,
+      score: typeof source.score === "number" ? source.score : undefined,
     })),
   };
 }
@@ -734,6 +803,10 @@ export const realClient: CasePassClient = {
       }
     }
 
+    if (uploadedDocuments.some((document) => document.status === "indexed")) {
+      await apiRequest<any>(`/handoffs/${handoff.id}/handover-notes`, { method: "POST" });
+    }
+
     try {
       return (await this.getHandoff(handoff.id)) as Handoff;
     } catch {
@@ -767,14 +840,7 @@ export const realClient: CasePassClient = {
       );
     }
 
-    try {
-      const generated = await apiRequest<any>(`/handoffs/${handoffId}/matter-reviews`, {
-        method: "POST",
-      });
-      return mapReviewFromAiDraft(generated);
-    } catch (_error) {
-      return null;
-    }
+    return null;
   },
 
   async listDocuments(handoffId) {
@@ -912,11 +978,14 @@ export const realClient: CasePassClient = {
     );
   },
 
-  async uploadHandoffDocument(handoffId, file, docType = "pleading") {
+  async uploadHandoffDocument(handoffId, file, docType = "pleading", pages) {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("doc_type", docType);
     formData.append("source_status", "original");
+    if (pages) {
+      formData.append("page_count", String(pages));
+    }
     const response = await apiRequest<any>(`/handoffs/${handoffId}/documents`, {
       method: "POST",
       body: formData,

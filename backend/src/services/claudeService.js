@@ -127,7 +127,7 @@ function resolveHandoffId(value) {
 }
 
 function ensureRelevantChunks(chunks) {
-  const filtered = (chunks || []).filter((chunk) => typeof chunk?.score === 'number' ? chunk.score >= 0.5 : true);
+  const filtered = (chunks || []).filter((chunk) => typeof chunk?.score === 'number' ? chunk.score >= 0.35 : true);
 
   if (filtered.length === 0) {
     throw createClaudeError('No relevant chunks were found for Claude analysis.', 'NO_CHUNKS_FOUND');
@@ -136,12 +136,13 @@ function ensureRelevantChunks(chunks) {
   return filtered;
 }
 
-function buildChunkBlock(chunks) {
+function buildChunkBlock(chunks, limit = 8) {
   return chunks
-    .slice(0, 5)
+    .slice(0, limit)
     .map((chunk, index) => {
       const score = typeof chunk.score === 'number' ? chunk.score.toFixed(2) : 'n/a';
-      return `[${index + 1}] (Doc: ${chunk.doc_name}, p.${chunk.page}, relevance: ${score})\n${chunk.text}`;
+      const chunkId = chunk.chunk_index === undefined || chunk.chunk_index === null ? 'n/a' : chunk.chunk_index;
+      return `[S${index + 1}] (Doc: ${chunk.doc_name}, p.${chunk.page}, chunk:${chunkId}, relevance:${score})\n${chunk.text}`;
     })
     .join('\n\n');
 }
@@ -200,7 +201,41 @@ function cleanLegalSnippet(value) {
     return `Claim form issued${issueDate ? ` on ${issueDate.trim()}` : ''}${claimNumber ? ` under claim ${claimNumber.trim()}` : ''}.`;
   }
 
+  const bestSentence = pickBestLegalSentence(text);
+  if (bestSentence) {
+    return trimToSentence(bestSentence, 1);
+  }
+
   return trimToSentence(text, 1);
+}
+
+function pickBestLegalSentence(text) {
+  const sentences = String(text || '')
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.replace(/\s+/g, ' ').trim())
+    .filter((sentence) => sentence.length >= 35 && sentence.length <= 420)
+    .filter((sentence) => !/\b(signature|full name|address|tel:|email:|copyright|test fixture|fee account|help with fees)\b/i.test(sentence));
+
+  let best = '';
+  let bestScore = 0;
+  for (const sentence of sentences) {
+    const score = [
+      /\b(claim|claims|damages|losses|interest|relief|breach|contract|counterclaim)\b/i,
+      /\b(defence|dispute|denies|acceptance testing|notice|suspension|failure)\b/i,
+      /\b(trial|hearing|deadline|directions|timetable|filed|served|signed|completed)\b/i,
+      /\b(disclosure|witness|expert|evidence|cross-examination|joint statement)\b/i,
+      /\b(costs|fee|£|gbp|vat|incurred)\b/i,
+      /\b(next step|proposed|order|application|consent)\b/i,
+      /\b\d{1,2}\s+[A-Z][a-z]+\s+\d{4}\b/i,
+    ].reduce((total, pattern) => total + (pattern.test(sentence) ? 1 : 0), 0);
+
+    if (score > bestScore) {
+      best = sentence;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? best : '';
 }
 
 function normaliseConversationHistory(history = []) {
@@ -260,6 +295,104 @@ function extractDocCitations(text) {
   }
 
   return citations;
+}
+
+function stripDocCitations(text) {
+  return String(text || '')
+    .replace(/\s*\[Doc:\s*[^,\]]+,\s*p\.\d+\]/gi, '')
+    .trim();
+}
+
+function tokeniseForMatch(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9£$€]+/i)
+    .filter((term) => term.length >= 3);
+}
+
+function sourceMatchScore(anchorText, chunkText) {
+  const anchorTerms = Array.from(new Set(tokeniseForMatch(anchorText)));
+  if (anchorTerms.length === 0) {
+    return 0;
+  }
+
+  const haystack = String(chunkText || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const compactHaystack = haystack.replace(/\s+/g, '');
+  const matched = anchorTerms.filter((term) => haystack.includes(term)).length;
+  const numberBonus = (String(anchorText || '').match(/\b\d{1,4}(?:[,.]\d{3})*(?:\.\d+)?\b|£\s?\d+|gbp\s?\d+/gi) || [])
+    .filter((value) => compactHaystack.includes(value.toLowerCase().replace(/\s+/g, '')))
+    .length;
+
+  return matched / anchorTerms.length + numberBonus * 0.2;
+}
+
+function pickBestChunkForText(anchorText, chunks, preferredCitation = null) {
+  const candidates = preferredCitation
+    ? chunks.filter((chunk) => (
+      chunk.doc_name === preferredCitation.doc_name &&
+      Number(chunk.page) === Number(preferredCitation.page)
+    ))
+    : [];
+  const pool = candidates.length > 0 ? candidates : chunks;
+
+  let best = null;
+  for (const chunk of pool || []) {
+    const score = sourceMatchScore(anchorText, chunk.text);
+    const weightedScore = score + (typeof chunk.score === 'number' ? chunk.score * 0.05 : 0);
+    if (!best || weightedScore > best.weightedScore) {
+      best = { chunk, weightedScore };
+    }
+  }
+
+  return best?.chunk || pool?.[0] || null;
+}
+
+function buildSourceFromChunk(chunk, anchorText = '') {
+  if (!chunk) {
+    return null;
+  }
+
+  return {
+    doc_name: chunk.doc_name,
+    page: Number(chunk.page),
+    chunk_index: chunk.chunk_index,
+    chunk_text: pickRelevantPreview(chunk.text, anchorText),
+    score: chunk.score,
+    anchor_text: stripDocCitations(anchorText),
+  };
+}
+
+function pickRelevantPreview(chunkText, anchorText = '') {
+  const cleanText = String(chunkText || '').replace(/\s+/g, ' ').trim();
+  if (!cleanText) {
+    return '';
+  }
+
+  const sentences = cleanText
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  if (sentences.length === 0) {
+    return cleanText.slice(0, 280);
+  }
+
+  let best = sentences[0];
+  let bestScore = -1;
+  for (const sentence of sentences) {
+    const score = sourceMatchScore(anchorText, sentence);
+    if (score > bestScore) {
+      best = sentence;
+      bestScore = score;
+    }
+  }
+
+  const preview = bestScore > 0 ? best : sentences[0];
+  return preview.length > 320 ? `${preview.slice(0, 317).trim()}...` : preview;
 }
 
 function buildGroundedChatAnswer(question, chunks) {
@@ -396,31 +529,220 @@ function mapCitationsToSources(strings, chunks) {
 
   for (const text of strings) {
     const citations = extractDocCitations(text);
+    const anchorText = stripDocCitations(text);
 
     for (const citation of citations) {
-      const sourceChunk = chunks.find((chunk) => chunk.doc_name === citation.doc_name && Number(chunk.page) === Number(citation.page));
+      const sourceChunk = pickBestChunkForText(anchorText, chunks, citation);
 
       if (!sourceChunk) {
         continue;
       }
 
-      const key = `${citation.doc_name}:${citation.page}`;
+      const anchorKey = anchorText.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80);
+      const key = `${sourceChunk.doc_name}:${sourceChunk.page}:${sourceChunk.chunk_index ?? 'na'}:${anchorKey}`;
       if (!uniqueSources.has(key)) {
-        uniqueSources.set(key, {
-          doc_name: sourceChunk.doc_name,
-          page: Number(sourceChunk.page),
-          chunk_text: sourceChunk.text,
-          score: sourceChunk.score,
-        });
+        uniqueSources.set(key, buildSourceFromChunk(sourceChunk, anchorText));
       }
     }
   }
 
-  return Array.from(uniqueSources.values());
+  return Array.from(uniqueSources.values()).filter(Boolean);
 }
 
 function parseStructuredJson(responseText) {
   return JSON.parse(extractJsonObject(responseText));
+}
+
+function groundCitedText(text, chunks, { allowStrategic = false, maxSentences = 1, maxLength = 260 } = {}) {
+  const value = String(text || '').trim();
+  if (!value || value === 'Not found in file.') {
+    return value || 'Not found in file.';
+  }
+  if (allowStrategic && value.startsWith('Strategic note:')) {
+    return value;
+  }
+
+  const cleaned = stripDocCitations(value);
+  const existingCitation = extractDocCitations(value)[0] || null;
+  const bestChunk = pickBestChunkForText(cleaned, chunks, existingCitation);
+
+  if (!bestChunk) {
+    return value;
+  }
+
+  return `${trimToSentence(cleaned, maxSentences, maxLength)} [Doc: ${bestChunk.doc_name}, p.${bestChunk.page}]`;
+}
+
+function groundCitedArray(items, chunks, options = {}) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const seen = new Set();
+  return items
+    .map((item) => groundCitedText(item, chunks, options))
+    .filter((item) => item && item !== 'Not found in file.')
+    .filter((item) => {
+      const key = stripDocCitations(item)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .slice(0, 160);
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+function splitCitedUnits(text) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) {
+    return [];
+  }
+
+  const citedUnits = [];
+  const citationPattern = /(.+?\[Doc:\s*[^,\]]+,\s*p\.\d+\])/g;
+  let match;
+  let lastIndex = 0;
+  while ((match = citationPattern.exec(value)) !== null) {
+    citedUnits.push(match[1].trim());
+    lastIndex = citationPattern.lastIndex;
+  }
+
+  const tail = value.slice(lastIndex).trim();
+  if (tail) {
+    citedUnits.push(tail);
+  }
+
+  if (citedUnits.length > 0) {
+    return citedUnits;
+  }
+
+  return value
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+function groundCitedParagraph(text, chunks, { maxSentences = 2, maxLength = 540 } = {}) {
+  const value = String(text || '').trim();
+  if (!value || value === 'Not found in file.') {
+    return value || 'Not found in file.';
+  }
+
+  const units = splitCitedUnits(value).slice(0, maxSentences);
+  const perSentenceLimit = Math.max(140, Math.floor(maxLength / Math.max(1, maxSentences)));
+  const grounded = groundCitedArray(units, chunks, { maxLength: perSentenceLimit });
+
+  if (grounded.length > 0) {
+    return grounded.join(' ');
+  }
+
+  return groundCitedText(value, chunks, { maxSentences, maxLength });
+}
+
+function isUsefulBriefFact(text) {
+  const value = stripDocCitations(text).replace(/\s+/g, ' ').trim();
+  if (!value || value === 'Not found in file.') {
+    return false;
+  }
+  if (value.length < 24) {
+    return false;
+  }
+  if (/\b(signature|full name|address|tel:|email:|copyright|test fixture|fee account|help with fees)\b/i.test(value)) {
+    return false;
+  }
+  return true;
+}
+
+function buildSupplementalFileFacts(chunks, existing = [], limit = 5) {
+  const seen = new Set(
+    existing.map((item) => stripDocCitations(item)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .slice(0, 120)),
+  );
+  const facts = [];
+  const usedDocs = new Set();
+
+  const addFact = (chunk) => {
+    if (!chunk || facts.length >= limit) {
+      return;
+    }
+
+    const fact = `${cleanLegalSnippet(chunk.text)} [Doc: ${chunk.doc_name}, p.${chunk.page}]`;
+    const key = stripDocCitations(fact)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .slice(0, 120);
+
+    if (!isUsefulBriefFact(fact) || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    usedDocs.add(chunk.doc_name);
+    facts.push(fact);
+  };
+
+  for (const chunk of chunks || []) {
+    if (usedDocs.has(chunk.doc_name)) {
+      continue;
+    }
+    addFact(chunk);
+  }
+
+  for (const chunk of chunks || []) {
+    addFact(chunk);
+  }
+
+  return facts;
+}
+
+function normaliseMatterReview(parsed, chunks) {
+  const fileFacts = groundCitedArray(parsed.file_based_facts, chunks, { maxLength: 340 });
+  const supplementalFacts = buildSupplementalFileFacts(chunks, fileFacts, 6);
+  const review = {
+    ...parsed,
+    stage_of_proceedings: groundCitedText(parsed.stage_of_proceedings, chunks, { maxLength: 320 }),
+    most_recent_operative_event: groundCitedText(parsed.most_recent_operative_event, chunks, { maxLength: 320 }),
+    live_deadlines: groundCitedArray(parsed.live_deadlines, chunks, { maxLength: 320 }).slice(0, 5),
+    urgent_issues: groundCitedArray(parsed.urgent_issues, chunks, { maxLength: 340 }).slice(0, 5),
+    missing_documents: Array.isArray(parsed.missing_documents) ? parsed.missing_documents : [],
+    next_procedural_step: groundCitedText(parsed.next_procedural_step, chunks, { maxLength: 340 }),
+    file_based_facts: groundCitedArray([...fileFacts, ...supplementalFacts], chunks, { maxLength: 340 }).slice(0, 8),
+  };
+
+  review.sources = mapCitationsToSources(collectStrings(review), chunks);
+  return review;
+}
+
+function normaliseHandoverNote(parsed, chunks) {
+  const groundedFileFacts = groundCitedArray(parsed.file_based_facts, chunks, { maxLength: 360 });
+  const supplementalFacts = buildSupplementalFileFacts(chunks, groundedFileFacts, 8);
+  const note = {
+    ...parsed,
+    executive_summary: groundCitedParagraph(parsed.executive_summary, chunks, { maxSentences: 2, maxLength: 540 }),
+    current_procedural_status: groundCitedText(parsed.current_procedural_status, chunks, { maxLength: 340 }),
+    next_required_step: groundCitedText(parsed.next_required_step, chunks, { maxLength: 360 }),
+    live_deadlines: groundCitedArray(parsed.live_deadlines, chunks, { maxLength: 320 }).slice(0, 5),
+    risk_flags: groundCitedArray(parsed.risk_flags, chunks, { maxLength: 360 }).slice(0, 5),
+    task_scope: String(parsed.task_scope || '').trim(),
+    file_based_facts: groundCitedArray([...groundedFileFacts, ...supplementalFacts], chunks, { maxLength: 360 }).slice(0, 8),
+    strategic_notes: groundCitedArray(parsed.strategic_notes, chunks, { maxLength: 380 }).slice(0, 4),
+  };
+
+  if (!extractDocCitations(note.executive_summary).length) {
+    const firstFact = note.file_based_facts[0] || note.current_procedural_status;
+    note.executive_summary = groundCitedText(note.executive_summary || stripDocCitations(firstFact), chunks);
+  }
+
+  note.sources = mapCitationsToSources(collectStrings(note), chunks);
+  return note;
 }
 
 async function callClaude(handoffId, system, userMessage, maxTokens, options = {}) {
@@ -692,6 +1014,7 @@ RESPONSE STYLE:
 - Start with the answer, then add the key file evidence.
 - Write in plain English legal register. Use solicitor, counsel, claimant, defendant, proceedings, hearing, order.
 - Match the language of the user's question. Keep document names, party names, amounts, and citation format unchanged.
+- Do not paste raw OCR, form headers, addresses, signature blocks, or unrelated boilerplate.
 - Do not expose chain-of-thought or describe your reasoning process.
 
 GROUNDING RULES:
@@ -700,7 +1023,8 @@ GROUNDING RULES:
 3. You may give cautious practical next steps when they naturally follow from the cited file facts, but make clear if the file itself does not expressly say the step.
 4. For follow-up questions, resolve pronouns such as "it", "that", "next", or "what do I do" using the recent conversation.
 5. If the file contains related facts but not a complete answer, say what the file shows and what is missing. Ask for the missing document or instruction.
-6. Use exactly "${INSUFFICIENT_EVIDENCE}" only when the provided chunks and conversation contain no relevant file fact at all.`;
+6. Use the most relevant source sentence for each factual point. Do not cite one chunk for unrelated facts.
+7. Use exactly "${INSUFFICIENT_EVIDENCE}" only when the provided chunks and conversation contain no relevant file fact at all.`;
 
   const userMessage = `Matter metadata:
 - Matter: ${matterName}
@@ -735,6 +1059,10 @@ function finaliseChatAnswer(question, answer, chunks) {
   }
 
   if (/thinking process/i.test(cleaned)) {
+    return buildGroundedChatAnswer(question, chunks);
+  }
+
+  if (/Signature:\s*_{3,}|Full name:|DX:\s*DX|Crown copyright|Document completed for CasePass test fixture/i.test(cleaned)) {
     return buildGroundedChatAnswer(question, chunks);
   }
 
@@ -792,16 +1120,24 @@ async function reviewMatter(handoffId, chunks, handoffData) {
 matter file chunks and produce a structured matter review.
 
 STRICT RULES:
-1. Every field in your output must cite its source: [Doc: {name}, p.{page}]
+1. Every factual field in your output must cite its source: [Doc: {name}, p.{page}]
 2. If a field cannot be determined from the file, write "Not found in file."
 3. Never infer deadlines or dates not explicitly stated in the documents.
-4. Summarise each string field in 35 words or fewer. Do not paste raw OCR, form headers, addresses, or whole chunks.
-5. Make stage, event, urgent issues, and next step distinct. Do not repeat the same sentence in multiple fields.
-6. Output must be valid JSON only. No preamble, no explanation, no markdown.`;
+4. Each string field must be a concise legal sentence, usually 12-36 words. Do not paste raw OCR, form headers, addresses, signature blocks, or whole chunks.
+5. Field roles:
+   - stage_of_proceedings: current procedural posture only.
+   - most_recent_operative_event: latest dated filing, order, or document event only.
+   - live_deadlines: explicit dates or due steps only; [] if none.
+   - urgent_issues: actual risks/issues only; [] if none.
+   - next_procedural_step: next practical action only.
+6. Include enough detail to be useful to a solicitor receiving the matter: claim/relief, defence or disputed issue, procedural posture, deadlines, evidence, costs, and immediate next action when supported.
+7. Use different source facts where possible. Do not cite the same chunk for unrelated facts if another chunk supports the point better.
+8. Make the fields distinct. Do not repeat the same sentence in multiple fields.
+9. Output must be valid JSON only. No preamble, no explanation, no markdown.`;
   const userMessage = `Matter: ${handoffData.case_name} | Court: ${handoffData.court} | Parties: ${handoffData.parties}
 
 SOURCE CHUNKS:
-${buildChunkBlock(relevantChunks)}
+${buildChunkBlock(relevantChunks, 14)}
 
 Last known action: ${handoffData.last_known_action || 'Not found in file.'}
 Next hearing date: ${handoffData.next_hearing_date || 'Not found in file.'}
@@ -814,6 +1150,7 @@ Produce a JSON object with exactly these fields:
   "urgent_issues": ["string with citation", ...],
   "missing_documents": ["string — inferred gap only if explicitly referenced in file but not present"],
   "next_procedural_step": "string with citation",
+  "file_based_facts": ["4-8 distinct factual case facts with citations from different documents where possible"],
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
 }
 
@@ -822,8 +1159,7 @@ Produce a JSON object with exactly these fields:
 
   try {
     const parsed = parseStructuredJson(responseText);
-    parsed.sources = mapCitationsToSources(collectStrings(parsed), relevantChunks);
-    return parsed;
+    return normaliseMatterReview(parsed, relevantChunks);
   } catch (_error) {
     return buildLocalMatterReview(relevantChunks, handoffData);
   }
@@ -848,6 +1184,7 @@ function buildLocalMatterReview(relevantChunks, handoffData = {}) {
     /urgent issue|risk|missing|breach|failure|deadline|due|hearing/i,
     'Not found in file.',
   );
+  const fileBasedFacts = buildSupplementalFileFacts(relevantChunks, [stage, deadline, urgentIssue, nextStep], 6);
 
   return {
     stage_of_proceedings: stage,
@@ -860,7 +1197,8 @@ function buildLocalMatterReview(relevantChunks, handoffData = {}) {
     urgent_issues: [urgentIssue],
     missing_documents: [],
     next_procedural_step: nextStep,
-    sources: mapCitationsToSources([stage, deadline, urgentIssue, nextStep], relevantChunks),
+    file_based_facts: fileBasedFacts,
+    sources: mapCitationsToSources([stage, deadline, urgentIssue, nextStep, ...fileBasedFacts], relevantChunks),
   };
 }
 
@@ -869,6 +1207,7 @@ async function generateHandoverNote(handoffId, chunks, handoffData, matterReview
   if (!hasAnthropicKey && !hasOpenAiCompatibleChat) {
     const firstChunk = relevantChunks[0];
     const secondChunk = relevantChunks[1] || firstChunk;
+    const fileFacts = buildSupplementalFileFacts(relevantChunks, [], 8);
     const response = {
       executive_summary: `${localFactFromChunk(firstChunk)} ${localFactFromChunk(secondChunk)}`.trim(),
       current_procedural_status: matterReview.stage_of_proceedings || localFactFromChunk(firstChunk),
@@ -876,9 +1215,9 @@ async function generateHandoverNote(handoffId, chunks, handoffData, matterReview
       live_deadlines: (matterReview.live_deadlines || []).filter(Boolean),
       risk_flags: (matterReview.urgent_issues || []).filter(Boolean),
       task_scope: handoffData.intended_task || 'No task scope recorded.',
-      file_based_facts: [localFactFromChunk(firstChunk), localFactFromChunk(secondChunk)],
-      strategic_notes: [`Strategic note: ${handoffData.intended_task || 'Review the released handoff pack.'}`],
-      sources: mapCitationsToSources([localFactFromChunk(firstChunk), localFactFromChunk(secondChunk)], relevantChunks),
+      file_based_facts: fileFacts.length ? fileFacts : [localFactFromChunk(firstChunk), localFactFromChunk(secondChunk)],
+      strategic_notes: buildSupplementalFileFacts(relevantChunks, fileFacts, 2),
+      sources: mapCitationsToSources([...fileFacts, localFactFromChunk(firstChunk), localFactFromChunk(secondChunk)], relevantChunks),
     };
     localClaudeLog(handoffId, response);
     return response;
@@ -893,27 +1232,32 @@ STRICT RULES:
 2. Separate file-based facts from strategic notes using clear headings.
 3. Write in formal English legal register.
 4. Do not include information not present in the source chunks.
-5. Keep each field concise. Do not paste raw OCR, form headers, addresses, or whole chunks.
-6. Do not duplicate the same source sentence across current_procedural_status, next_required_step, and risk_flags.
-7. Output must be valid JSON only. No preamble, no markdown fences.`;
+5. Keep each field concise but useful: executive_summary should be 2 evidence-backed sentences; scalar fields one clear sentence; 6-8 file_based_facts; 1-5 live_deadlines; and 1-5 risk_flags when supported.
+6. Use different source facts where possible. Do not cite one chunk for unrelated facts if another retrieved chunk supports the point better.
+7. Do not paste raw OCR, form headers, addresses, signature blocks, or whole chunks.
+8. Do not duplicate the same source sentence across current_procedural_status, next_required_step, risk_flags, and file_based_facts.
+9. Use [] for risk_flags or live_deadlines when the source chunks do not show one.
+10. Cover the whole file when supported: claim/relief, defence position, procedural posture, trial/hearing dates, evidence/witness/expert material, costs, disclosure or missing steps, and practical receiving-counsel concerns.
+11. strategic_notes must be practical case-handling observations grounded in cited file facts. If a note contains a factual premise, cite it.
+12. Output must be valid JSON only. No preamble, no markdown fences.`;
   const userMessage = `Matter: ${handoffData.case_name} | Court: ${handoffData.court} | Parties: ${handoffData.parties}
 
 Matter review summary:
 ${JSON.stringify(matterReview)}
 
 SOURCE CHUNKS:
-${buildChunkBlock(relevantChunks)}
+${buildChunkBlock(relevantChunks, 18)}
 
 Output JSON:
 {
-  "executive_summary": "2-3 sentence matter overview with citations",
+  "executive_summary": "2 cited sentences covering claim/relief, dispute/defence, and procedural posture",
   "current_procedural_status": "string with citation",
   "next_required_step": "string with citation",
-  "live_deadlines": ["string with citation"],
-  "risk_flags": ["string with citation or 'Strategic note: ...' if no doc source"],
+  "live_deadlines": ["specific dated deadline/hearing with citation"],
+  "risk_flags": ["specific risk, conflict, missing item, or issue with citation"],
   "task_scope": "string — what the receiving lawyer is being asked to do",
-  "file_based_facts": ["string with citation"],
-  "strategic_notes": ["string — clearly marked as solicitor instruction, no citation required"],
+  "file_based_facts": ["6-8 distinct, important facts with citations from across the file"],
+  "strategic_notes": ["2-4 practical, cited case-handling observations"],
   "sources": [{ "doc_name", "page", "chunk_text", "score" }]
 }
 
@@ -922,8 +1266,7 @@ Output JSON:
 
   try {
     const parsed = parseStructuredJson(responseText);
-    parsed.sources = mapCitationsToSources(collectStrings(parsed), relevantChunks);
-    return parsed;
+    return normaliseHandoverNote(parsed, relevantChunks);
   } catch (error) {
     throw createClaudeError('AI handover note failed to produce valid JSON output.', 'CLAUDE_HANDOVER_NOTE_INVALID', error);
   }

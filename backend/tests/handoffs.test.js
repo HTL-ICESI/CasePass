@@ -147,9 +147,8 @@ describe('handoff workflow routes', () => {
     }
     expect(upload.status).toBe(201);
     expect(upload.body).toHaveProperty('document');
-    expect(upload.body.indexing).toEqual({ queued: true });
-
-    await query('UPDATE documents SET status = $2, chunks_count = 1 WHERE id = $1', [upload.body.document.id, 'indexed']);
+    expect(upload.body.indexing).toMatchObject({ status: 'indexed' });
+    expect(upload.body.document.status).toBe('indexed');
 
     const review = await request(app)
       .post(`/api/handoffs/${handoffId}/matter-reviews`)

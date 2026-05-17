@@ -47,9 +47,13 @@ describe('claudeService core', () => {
       max_tokens: 650,
     }));
     expect(result.answer).toContain('[Doc: order.pdf, p.3]');
-    expect(result.sources).toEqual([
-      { doc_name: 'order.pdf', page: 3, chunk_text: 'The court listed the hearing.', score: 0.91 },
-    ]);
+    expect(result.sources[0]).toMatchObject({
+      doc_name: 'order.pdf',
+      page: 3,
+      chunk_text: 'The court listed the hearing.',
+      score: 0.91,
+      chunk_index: 0,
+    });
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[CLAUDE] handoff=handoff-10'));
   });
 
@@ -70,7 +74,38 @@ describe('claudeService core', () => {
     expect(result.sources[0]).toMatchObject({ doc_name: 'order.pdf', page: 2 });
   });
 
-  test('reviewMatter returns structured error payload when JSON is invalid', async () => {
+  test('mapCitationsToSources selects the closest chunk on the same page', () => {
+    const { service } = loadServiceWithResponse('{"unused":true}');
+    const chunks = [
+      {
+        text: 'Signature and address for service. Full name: Daniel Estrada.',
+        doc_name: 'n170.pdf',
+        page: 2,
+        chunk_index: 0,
+        score: 0.9,
+      },
+      {
+        text: 'Expert cross-examination requires additional trial time and a longer timetable.',
+        doc_name: 'n170.pdf',
+        page: 2,
+        chunk_index: 1,
+        score: 0.88,
+      },
+    ];
+
+    const sources = service.__test__.mapCitationsToSources([
+      'Expert cross-examination requires additional trial time. [Doc: n170.pdf, p.2]',
+    ], chunks);
+
+    expect(sources[0]).toMatchObject({
+      doc_name: 'n170.pdf',
+      page: 2,
+      chunk_index: 1,
+      chunk_text: 'Expert cross-examination requires additional trial time and a longer timetable.',
+    });
+  });
+
+  test('reviewMatter falls back to local cited review when JSON is invalid', async () => {
     const { service } = loadServiceWithResponse('not valid json');
     const chunks = [{ text: 'Order made.', doc_name: 'order.pdf', page: 2, chunk_index: 0, score: 0.95 }];
 
@@ -82,7 +117,8 @@ describe('claudeService core', () => {
       next_hearing_date: '2026-06-20',
     });
 
-    expect(result).toEqual({ error: 'AI review failed to produce valid structured output', raw: 'not valid json' });
+    expect(result.stage_of_proceedings).toContain('[Doc: order.pdf, p.2]');
+    expect(result.sources[0]).toMatchObject({ doc_name: 'order.pdf', page: 2, chunk_index: 0 });
   });
 
   test('stripMarkdownFences helper also strips qwen think blocks', () => {

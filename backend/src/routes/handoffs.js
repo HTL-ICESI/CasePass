@@ -184,21 +184,40 @@ router.post('/handoffs/:id/documents', upload.single('file'), async (req, res) =
       buildStoredFilePayload(req.file, 'pending'),
       buildDocumentMetadata(req.body, 'pleading'),
     );
-    setImmediate(async () => {
-      try {
-        await maybeIndexUploadedPdf(req.params.id, created, req.file);
-      } catch (indexingError) {
-        console.error('[handoffs] background indexing failed', {
-          handoffId: req.params.id,
-          documentId: created.id,
-          reason: indexingError.message,
-        });
+    let indexing = null;
+    let indexingError = null;
+    try {
+      indexing = await maybeIndexUploadedPdf(req.params.id, created, req.file);
+      if (indexing?.status === 'indexed') {
+        await query(
+          `
+            UPDATE documents
+            SET status = 'indexed',
+                chunks_count = $2,
+                index_error = NULL
+            WHERE id = $1
+          `,
+          [created.id, indexing.chunks_indexed || created.chunks_count || 0],
+        );
       }
-    });
+    } catch (error) {
+      indexingError = error;
+      console.error('[handoffs] indexing failed', {
+        handoffId: req.params.id,
+        documentId: created.id,
+        reason: error.message,
+      });
+    }
+
+    const refreshed = await query('SELECT * FROM documents WHERE id = $1', [created.id]);
+    const document = refreshed.rows[0] || created;
 
     return res.status(201).json({
-      document: created,
-      indexing: { queued: true },
+      document,
+      indexing: indexing || {
+        status: document.status,
+        error: indexingError?.message || document.index_error || null,
+      },
     });
   } catch (error) {
     return sendError(res, error);
@@ -290,7 +309,7 @@ router.post('/handoffs/:id/matter-reviews', async (req, res) => {
       return res.status(409).json({ error: 'At least one indexed document is required before AI review.', code: 'NO_INDEXED_DOCUMENTS' });
     }
 
-    if (handoff.status === 'file_upload_open' || handoff.status === 'pack_building') {
+    if (['clearance_pending', 'file_upload_open', 'pack_building'].includes(handoff.status)) {
       await handoffService.beginPackBuilding(req.params.id, req.user.id);
     }
     const review = await aiHandoffService.reviewMatter(req.params.id, req.user.id);
@@ -316,11 +335,16 @@ router.post('/handoffs/:id/handover-notes', async (req, res) => {
       return res.status(403).json({ error: 'Only the sending solicitor may generate a handover note.' });
     }
 
-    if (!['pack_building', 'pack_review'].includes(handoff.status)) {
+    if (['clearance_pending', 'file_upload_open'].includes(handoff.status)) {
+      await handoffService.beginPackBuilding(req.params.id, req.user.id);
+    }
+
+    const refreshed = await handoffService.getHandoffRow(req.params.id);
+    if (!['pack_building', 'pack_review'].includes(refreshed.status)) {
       return res.status(409).json({
         error: 'Handover note generation is only available while building or reviewing the pack.',
-        current_status: handoff.status,
-        allowed_from: ['pack_building', 'pack_review'],
+        current_status: refreshed.status,
+        allowed_from: ['clearance_pending', 'file_upload_open', 'pack_building', 'pack_review'],
       });
     }
 

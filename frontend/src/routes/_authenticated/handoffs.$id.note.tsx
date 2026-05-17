@@ -72,12 +72,12 @@ function NotePage() {
       toast.error(error instanceof Error ? error.message : "Could not release the handoff pack."),
   });
 
-  if (handoff.isLoading || review.isLoading) {
+  if (handoff.isLoading) {
     return <Skeleton className="h-[600px] w-full" />;
   }
 
   const h = handoff.data;
-  const r = review.data;
+  const r = h ? (review.data ?? buildFallbackReview(h)) : null;
   const isSender = Boolean(user && h && h.ownerId === user.id);
   const note = h?.latestNote;
   if (!h || !r) {
@@ -97,7 +97,7 @@ function NotePage() {
           Auto-generated brief · grounded in indexed documents
         </div>
         <div className="flex items-center gap-2 print:hidden">
-          {isSender && h?.backendStatus === "pack_building" && (
+          {isSender && ["pack_building", "pack_review"].includes(h?.backendStatus || "") && (
             <Button
               variant="outline"
               size="sm"
@@ -105,7 +105,7 @@ function NotePage() {
               disabled={generateNote.isPending}
             >
               {generateNote.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              Generate note
+              {h.noteId ? "Refresh note" : "Generate note"}
             </Button>
           )}
           {isSender && h?.backendStatus === "pack_review" && h?.noteId && !h.noteApproved && (
@@ -163,6 +163,15 @@ function NotePage() {
             text={note?.executiveSummary || h.summary}
             onOpenCitation={openCitation}
           />
+          {note?.executiveSummaryCitation && (
+            <div className="mt-2">
+              <CitationChip
+                citation={note.executiveSummaryCitation}
+                anchorText={note.executiveSummary}
+                onOpenDocument={openCitation}
+              />
+            </div>
+          )}
         </Block>
 
         <Block title="Where we stand">
@@ -271,16 +280,23 @@ function NotePage() {
         </Block>
 
         <Block title="Recommended next step">
-          <p className="text-sm leading-relaxed text-foreground">
-            {note?.nextRequiredStep || r.nextStep.text}{" "}
-            {!note?.nextRequiredStep && r.nextStep.citation && (
-              <CitationChip
-                citation={r.nextStep.citation}
-                anchorText={r.nextStep.text}
-                onOpenDocument={openCitation}
-              />
-            )}
-          </p>
+          {(() => {
+            const text = note?.nextRequiredStep || r.nextStep.text;
+            const citation = note?.nextRequiredStepCitation || r.nextStep.citation;
+
+            return (
+              <p className="text-sm leading-relaxed text-foreground">
+                {text}{" "}
+                {citation && (
+                  <CitationChip
+                    citation={citation}
+                    anchorText={text}
+                    onOpenDocument={openCitation}
+                  />
+                )}
+              </p>
+            );
+          })()}
         </Block>
 
         {note?.fileBasedFacts && note.fileBasedFacts.length > 0 && (
@@ -306,7 +322,16 @@ function NotePage() {
           <Block title="Strategic notes">
             <ul className="space-y-3 text-sm leading-relaxed text-foreground">
               {note.strategicNotes.map((item, index) => (
-                <li key={index}>{item}</li>
+                <li key={index}>
+                  {item.text}{" "}
+                  {item.citation && (
+                    <CitationChip
+                      citation={item.citation}
+                      anchorText={item.text}
+                      onOpenDocument={openCitation}
+                    />
+                  )}
+                </li>
               ))}
             </ul>
           </Block>
@@ -318,6 +343,22 @@ function NotePage() {
       </article>
     </div>
   );
+}
+
+function buildFallbackReview(handoff: Handoff): MatterReview {
+  const nextStep = handoff.nextHearingAt
+    ? `Prepare for the next hearing on ${formatDate(handoff.nextHearingAt)}.`
+    : "Review the indexed documents and confirm the next procedural step.";
+
+  return {
+    stage: handoff.backendStatus.replace(/_/g, " "),
+    lastEvent: { text: handoff.summary || "No structured event has been generated yet." },
+    urgentIssues: [],
+    missingDocs: [],
+    nextStep: { text: nextStep },
+    liveDeadlines: [],
+    fileBasedFacts: handoff.latestNote?.fileBasedFacts || [],
+  };
 }
 
 function Row({ label, value }: { label: string; value: string }) {

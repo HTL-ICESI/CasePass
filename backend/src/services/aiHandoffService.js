@@ -201,7 +201,7 @@ async function reviewMatter(handoffId, actorId = null) {
   const handoff = await getHandoffContext(handoffId);
   let chunks = [];
   try {
-    chunks = await getTopicSearchChunks(handoffId, 8);
+    chunks = await getTopicSearchChunks(handoffId, 14);
   } catch (_error) {
     chunks = [];
   }
@@ -232,7 +232,7 @@ async function generateHandoverNote(handoffId, actorId = null) {
   const matterReview = await reviewMatter(handoffId, actorId);
   let chunks = [];
   try {
-    chunks = await getTopicSearchChunks(handoffId, 12);
+    chunks = await getTopicSearchChunks(handoffId, 18);
   } catch (_error) {
     chunks = [];
   }

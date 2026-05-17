@@ -31,7 +31,12 @@ function isSummaryQuery(text) {
 
 function isCaseGuidanceQuery(text) {
   const normalised = normaliseDiacritics(text);
-  return /\b(next\s+step|what\s+(do|should)\s+i\s+do|deadline|hearing|directions?|prepare|file|serve|due|que\s+(hago|debo\s+hacer)|proximo\s+paso)\b/i.test(normalised);
+  return /\b(next\s+step|what\s+next|what\s+(do|should)\s+i\s+do|deadline|hearing|directions?|prepare|file|serve|due|que\s+(hago|debo\s+hacer)|proximo\s+paso)\b/i.test(normalised);
+}
+
+function isGreetingOnly(text) {
+  const normalised = normaliseDiacritics(text).toLowerCase().trim();
+  return /^(hola|hello|hi|hey|buenas|buenos dias|buenas tardes|buenas noches|gracias|thanks|thank you)[!.?\s]*$/.test(normalised);
 }
 
 function normaliseConversationHistory(history) {
@@ -56,6 +61,20 @@ function buildRetrievalQuery(question, history) {
     .join('\n');
 
   return [recent, question].filter(Boolean).join('\n');
+}
+
+function mergeChunks(...groups) {
+  const seen = new Map();
+  for (const group of groups) {
+    for (const chunk of group || []) {
+      const key = `${chunk.doc_name}:${chunk.page}:${chunk.chunk_index ?? ''}`;
+      const existing = seen.get(key);
+      if (!existing || Number(chunk.score || 0) > Number(existing.score || 0)) {
+        seen.set(key, chunk);
+      }
+    }
+  }
+  return Array.from(seen.values()).sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
 }
 
 function writeSse(res, event, data) {
@@ -209,6 +228,16 @@ async function prepareChatRequest(req) {
   }
 
   const history = normaliseConversationHistory(conversationHistory);
+  if (isGreetingOnly(question)) {
+    return {
+      status: 200,
+      body: {
+        answer: 'Hola. Puedo ayudarte a revisar el expediente: próximos pasos, fechas, riesgos, documentos faltantes o el resumen del caso.',
+        sources: [],
+      },
+    };
+  }
+
   if (isDemoCase(caseRow)) {
     return {
       question: String(question).trim(),
@@ -223,13 +252,23 @@ async function prepareChatRequest(req) {
   const retrievalQuery = buildRetrievalQuery(question, history);
   let chunks = [];
   if (isSummaryQuery(question) || isCaseGuidanceQuery(question)) {
+    let directChunks = [];
     try {
-      chunks = await getTopicSearchChunks(resolvedHandoffId, 12);
+      const topicChunks = await getTopicSearchChunks(resolvedHandoffId, 12);
+      chunks = Array.isArray(topicChunks) ? topicChunks : [];
     } catch (_error) {
       chunks = [];
     }
+    try {
+      const foundChunks = await searchChunks(retrievalQuery, resolvedHandoffId, 5);
+      directChunks = Array.isArray(foundChunks) ? foundChunks : [];
+    } catch (_error) {
+      directChunks = [];
+    }
+    chunks = mergeChunks(directChunks, chunks).slice(0, 12);
   } else {
-    chunks = await searchChunks(retrievalQuery, resolvedHandoffId, 5);
+    const foundChunks = await searchChunks(retrievalQuery, resolvedHandoffId, 5);
+    chunks = Array.isArray(foundChunks) ? foundChunks : [];
   }
 
   if (chunks.length === 0 || chunks.every((chunk) => chunk.score < 0.35)) {
